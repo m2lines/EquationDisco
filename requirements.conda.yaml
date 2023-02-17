@@ -1,0 +1,9 @@
+name: eqn-disc
+channels:
+  - anaconda
+dependencies:
+  - mypy
+  - black
+  - pytest
+  - pydocstyle
+  - pylint
