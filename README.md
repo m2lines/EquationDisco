@@ -1,1 +1,1 @@
-# M<sup>2</sup>Lines Equation discovery package.
+# M<sup>2</sup>LInES Equation discovery package.
