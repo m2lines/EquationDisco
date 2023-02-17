@@ -1,0 +1,56 @@
+name: Python Package using Conda
+
+on: [push]
+
+jobs:
+  build:
+
+    strategy:
+      matrix:
+        python_version: ["3.8", "3.9", "3.10"]
+        os: ["ubuntu-latest", "macos-latest"]
+
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python_version }}
+    - name: Add conda to system path
+      run: |
+        # $CONDA is an environment variable pointing to the root of the miniconda directory
+        echo $CONDA/bin >> $GITHUB_PATH
+
+    - name: Update conda
+      run : |
+        conda update conda
+
+    - name: Install dependencies
+      run: |
+        conda env update --file requirements.conda.yaml --name base
+
+    - name: Update conda packages
+      run : |
+        conda update --all
+
+    - name: Format with black
+      run: |
+        black $(git ls-files eqn_disco)
+
+    - name: Lint with Pylint
+      run: |
+        pylint $(git ls-files eqn_disco)
+
+    - name: Test with pytest
+      run: |
+        pytest tests
+
+    - name: Lint with Mypy
+      run: |
+        mypy $(git ls-files eqn_disco)
+
+    - name: Lint with Pydocstyle
+      run : |
+        pydocstyle $(git ls-files eqn_disco) --convention=numpy
