@@ -1,4 +1,4 @@
-name: eqn-disc
+name: eqn-disco
 channels:
   - anaconda
 dependencies:
