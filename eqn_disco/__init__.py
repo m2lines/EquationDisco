@@ -1,0 +1,1 @@
+"""Equation discovery package init."""
