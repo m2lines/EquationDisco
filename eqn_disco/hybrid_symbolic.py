@@ -5,7 +5,7 @@ import numpy as np
 import xarray as xr
 from scipy.stats import pearsonr
 from sklearn.linear_model import LinearRegression
-from pyqg_parameterization_benchmarks.utils import FeatureExtractor, Parameterization
+from .utils import FeatureExtractor, Parameterization
 
 
 def make_custom_gplearn_functions(ds):
