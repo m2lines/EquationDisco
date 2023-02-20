@@ -1,4 +1,3 @@
-import pyqg
 import gplearn
 import gplearn.genetic
 import numpy as np
