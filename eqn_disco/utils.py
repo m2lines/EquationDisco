@@ -1,3 +1,4 @@
+"""Utility functions."""
 import re
 import pyqg
 import operator
@@ -6,13 +7,30 @@ import xarray as xr
 
 
 class Parameterization(pyqg.Parameterization):
-    """Helper class for defining parameterizations. This extends the normal
-    pyqg parameterization framework to handle prediction of either subgrid
-    forcings or fluxes, as well as to apply to either pyqg.Models or
-    xarray.Datasets."""
+    """Helper class for defining parameterizations.
+
+    This extends the normal pyqg parameterization framework to handle
+    prediction of either subgrid forcings or fluxes, as well as to apply to
+    either pyqg.Models orxarray.Datasets.
+
+    """
 
     @property
     def targets(self):
+        """List the names of the quantities the parameterization predicts.
+
+        Returns
+        -------
+        List[str]
+            List of parameterization targets returned by this parameterization.
+            Valid options are "q_forcing_total", "q_subgrid_forcing",
+            "u_subgrid_forcing", "v_subgrid_forcing", "uq_subgrid_flux",
+            "vq_subgrid_flux", "uu_subgrid_flux", "vv_subgrid_flux", and
+            "uv_subgrid_flux". See the dataset description notebook or the
+            paper for more details on the meanings of these target fields and
+            how they're used.
+
+        """
         raise NotImplementedError
 
     def predict(self):
