@@ -54,6 +54,17 @@ class Parameterization(pyqg.Parameterization):
 
     @property
     def nx(self):
+        """Spatial res of pyqg.QGModel to which this parameterization applies.
+
+        Currently only supports 64 to replicate the paper, but could be easily
+        extended.
+
+        Returns
+        -------
+        int
+            Spatial resolution, i.e. pyqg.QGModel.nx
+        """
+
         return 64  # Future work should generalize this.
 
     @property
