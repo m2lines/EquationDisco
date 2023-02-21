@@ -1,4 +1,5 @@
 """Utility functions."""
+from typing import List, Dict, Union
 import re
 import pyqg
 import operator
@@ -16,7 +17,7 @@ class Parameterization(pyqg.Parameterization):
     """
 
     @property
-    def targets(self):
+    def targets(self) -> List[str]:
         """List the names of the quantities the parameterization predicts.
 
         Returns
@@ -33,7 +34,22 @@ class Parameterization(pyqg.Parameterization):
         """
         raise NotImplementedError
 
-    def predict(self):
+    def predict(self) -> Dict[str, Union[np.ndarray, xr.DataArray]]:
+        """Subgrid forcing predictions, as a dictionary of target => array.
+
+        Parameters
+        ----------
+        model : Union[pyqg.QGModel, xarray.Dataset]
+            Model for which we are making subgrid forcing predictions.
+
+        Returns
+        -------
+        Dict[str, Union[numpy.ndarray, xarray.DataArray]]
+            Dictionary of target variable name to subgrid forcing predictions,
+            either as numpy arrays (if the model is a pyqg.QGModel) or as
+            xarray.DataArrays (if the model is an xarray.Dataset).
+
+        """
         raise NotImplementedError
 
     @property
