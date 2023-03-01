@@ -313,7 +313,21 @@ class FeatureExtractor:
         self.wv2 = self.ik**2 + self.il**2
 
     # Helpers for taking FFTs / deciding if we need to
+    # TODO: Populate docstring.
     def fft(self, x):
+        """Compute the FFT of ``x``.
+
+        Parameters
+        ----------
+        x : ?
+            Description.
+
+        Returns
+        -------
+        ?
+
+        """
+        # TODO: avoid naked except.
         try:
             return self.m.fft(x)
         except:
@@ -453,6 +467,7 @@ class FeatureExtractor:
         return key in self.cache or hasattr(self.m, key)
 
     # A bit of additional hackery to allow for the reading of features or properties
+    # TODO: replace q with more meaningful name
     def __getitem__(self, q):
         if isinstance(q, str):
             if q in self.cache:
@@ -502,7 +517,7 @@ def energy_budget_figure(models, skip=0):
         if i == 3:
             plt.legend()
         plt.xlabel("Zonal wavenumber $[m^{-1}]$")
-    for ax in fig.axes:
-        ax.set_ylim(-vmax, vmax)
+    for axis in fig.axes:
+        axis.set_ylim(-vmax, vmax)
     plt.tight_layout()
     return fig
