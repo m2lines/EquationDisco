@@ -1,10 +1,13 @@
 """Utility functions."""
+import operator
 from typing import List, Dict, Union
 import re
 import pyqg
-import operator
 import numpy as np
 import xarray as xr
+
+
+import matplotlib.pyplot as plt
 
 
 class Parameterization(pyqg.Parameterization):
@@ -53,7 +56,7 @@ class Parameterization(pyqg.Parameterization):
         raise NotImplementedError
 
     @property
-    def nx(self):
+    def spatial_res(self) -> int:
         """Spatial res of pyqg.QGModel to which this parameterization applies.
 
         Currently only supports 64 to replicate the paper, but could be easily
@@ -64,52 +67,103 @@ class Parameterization(pyqg.Parameterization):
         int
             Spatial resolution, i.e. pyqg.QGModel.nx
         """
-
         return 64  # Future work should generalize this.
 
     @property
     def parameterization_type(self):
+        """Return the parameterization type.
+
+        Returns whether this is a potential vorticity parameterization (i.e.
+        "q_parameterization") or velocity parameterization
+        (i.e. "uv_parameterization"). This is needed for pyqg to properly handle parameterizations
+        internally.
+
+        Returns
+        -------
+        str
+            Indication of whether the parameterization targets PV or velocity.
+
+        """
         if any(q in self.targets[0] for q in ["q_forcing", "q_subgrid"]):
             return "q_parameterization"
-        else:
-            return "uv_parameterization"
+
+        return "uv_parameterization"
 
     def __call__(self, m):
-        def arr(x):
-            if isinstance(x, xr.DataArray):
-                x = x.data
-            return x.astype(m.q.dtype)
+        """Invoke the parameterization in the format required by pyqg.
 
+        Parameters
+        ----------
+        m : Union[pyqg.QGModel, xarray.Dataset]
+            Model or dataset.
+
+        Returns
+        -------
+        Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]
+           Either a single array (if ``parameterization_type`` is
+           ``q_parameterization``) or a tuple of two arrays (if
+           ``parameterization_type`` is ``uv_parameterization``) representing
+           the subgrid forcing, with each array having the same shape and data
+           type as the model's PV variable.
+
+        """
+        ensure_array = lambda x: (x.data if isinstance(x, xr.DataArray) else x).astype(
+            m.q.dtype
+        )
         preds = self.predict(m)
-        keys = list(sorted(preds.keys()))
+        keys = list(sorted(preds.keys()))  # these are the same as our targets
         assert keys == self.targets
+
+        # decide how to convert parameterization predictions to the right
+        # output format
         if len(keys) == 1:
-            return arr(preds[keys[0]])
+            # if there's only one target, it's a PV parameterization, and we can
+            # just return the array
+            return ensure_array(preds[keys[0]])
         elif keys == ["uq_subgrid_flux", "vq_subgrid_flux"]:
+            # these are PV subgrid fluxes; we need to take their divergence
             ex = FeatureExtractor(m)
-            return arr(
+            return ensure_array(
                 ex.ddx(preds["uq_subgrid_flux"]) + ex.ddy(preds["vq_subgrid_flux"])
             )
         elif "uu_subgrid_flux" in keys and len(keys) == 3:
+            # these are velocity subgrid fluxes; we need to take two sets of
+            # divergences and return a tuple
             ex = FeatureExtractor(m)
             return (
-                arr(
+                ensure_array(
                     ex.ddx(preds["uu_subgrid_flux"]) + ex.ddy(preds["uv_subgrid_flux"])
                 ),
-                arr(
+                ensure_array(
                     ex.ddx(preds["uv_subgrid_flux"]) + ex.ddy(preds["vv_subgrid_flux"])
                 ),
             )
         else:
-            return tuple(arr(preds[k]) for k in keys)
+            # this is a "simple" velocity parameterization; return a tuple
+            return tuple(ensure_array(preds[k]) for k in keys)
 
     def run_online(self, sampling_freq=1000, **kw):
-        """Run a parameterized pyqg.QGModel, saving snapshots every 1000h."""
+        """Initialize and run a parameterized pyqg.QGModel.
 
+        Saves snapshots periodically.
+
+        Parameters
+        ----------
+        sampling_freq : int
+            Number of timesteps (hours) between saving snapshots.
+        **kwargs : dict
+            Simulation parameters to pass to pyqg.QGModel.
+
+        Returns
+        -------
+        ds : xarray.Dataset
+            Dataset of parameterized model run snapshots
+
+        """
         # Initialize a pyqg model with this parameterization
         params = dict(kw)
         params[self.parameterization_type] = self
-        params["nx"] = self.nx
+        params["nx"] = self.spatial_res
         m = pyqg.QGModel(**params)
 
         # Run it, saving snapshots
@@ -135,9 +189,22 @@ class Parameterization(pyqg.Parameterization):
         return ds
 
     def test_offline(self, dataset):
-        """Evaluate the parameterization on an offline dataset,
-        computing a variety of metrics."""
+        """Test offline performance of parameterization on existing dataset.
 
+        Parameters
+        ----------
+        dataset : xarray.Dataset
+            Dataset containing coarsened inputs and subgrid forcing variables
+            matching this parameterization's targets.
+
+        Returns
+        -------
+        test : xarray.Dataset
+            Dataset of offline performance metrics specific to each predicted
+            target, along with the target values themselves (subselected from
+            the original dataset).
+
+        """
         test = dataset[self.targets]
 
         for key, val in self.predict(dataset).items():
@@ -149,6 +216,8 @@ class Parameterization(pyqg.Parameterization):
             true_centered = truth - truth.mean()
             pred_centered = preds - preds.mean()
             true_var = true_centered**2
+
+            # TODO: Find out why these variables are assigned, but unused.
             pred_var = pred_centered**2
             true_pred_cov = true_centered * pred_centered
 
@@ -184,10 +253,35 @@ class Parameterization(pyqg.Parameterization):
 
 
 class FeatureExtractor:
-    """Helper class for taking spatial derivatives and translating string
-    expressions into data. Works with either pyqg.Model or xarray.Dataset."""
+    """Helper class for evaluating arbitrarily deep string expressions.
+
+    For example, "laplacian(ddx(mul(u,q)))") on either pyqg.QGModel or
+    xarray.Dataset instances.
+
+    Parameters
+    ----------
+    model_or_dataset : Union[pyqg.QGModel, xarray.Dataset]
+        Model or dataset we'll be extracting features from.
+
+    """
 
     def __call__(self, feature_or_features, flat=False):
+        """Extract the given feature/features from underlying dataset/ model.
+
+        Parameters
+        ----------
+        feature_or_features : Union[str, List[str]]
+            Either a single string expression or a list of string expressions.
+        flat : bool, optional
+            Whether to flatten the output of each feature to an array with only
+            one dimension (rather than a spatial field). Defaults to False.
+
+        Returns
+        -------
+        res : numpy.ndarray
+            Array of values of corresponding features.
+
+        """
         arr = lambda x: x.data if isinstance(x, xr.DataArray) else x
         if isinstance(feature_or_features, str):
             res = arr(self.extract_feature(feature_or_features))
@@ -201,6 +295,7 @@ class FeatureExtractor:
         return res
 
     def __init__(self, model_or_dataset):
+        """Build ``FeatureExtractor``."""
         self.m = model_or_dataset
         self.cache = {}
 
@@ -295,8 +390,19 @@ class FeatureExtractor:
 
     # Main function: interpreting a string as a feature
     def extract_feature(self, feature):
-        """Evaluate a string feature, e.g. laplacian(advected(curl(u,v)))."""
+        """Evaluate a string feature, e.g. laplacian(advected(curl(u,v))).
 
+        Parameters
+        ----------
+        feature : ???
+            Presumably this is a string giving operations. Add documentation
+            about how it should be formatted.
+
+        Returns
+        -------
+        ???
+
+        """
         # Helper to recurse on each side of an arity-2 expression
         def extract_pair(s):
             depth = 0
@@ -317,7 +423,7 @@ class FeatureExtractor:
             # Check if the feature looks like "function(expr1, expr2)"
             # (better would be to write a grammar + use a parser,
             # but this is a very simple DSL)
-            match = re.search(f"^([a-z]+)\((.*)\)$", feature)
+            match = re.search(r"^([a-z]+)\((.*)\)$", feature)
             if match:
                 op, inner = match.group(1), match.group(2)
                 if op in ["mul", "add", "sub", "pow"]:
@@ -351,7 +457,7 @@ class FeatureExtractor:
         if isinstance(q, str):
             if q in self.cache:
                 return self.cache[q]
-            elif re.search(f"^[\-\d\.]+$", q):
+            elif re.search(r"^[\-\d\.]+$", q):
                 return float(q)
             else:
                 return getattr(self.m, q)
@@ -371,7 +477,6 @@ def energy_budget_term(model, term):
 
 
 def energy_budget_figure(models, skip=0):
-    import matplotlib.pyplot as plt
 
     fig = plt.figure(figsize=(12, 5))
     vmax = 0
