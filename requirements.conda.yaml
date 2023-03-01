@@ -16,3 +16,4 @@ dependencies:
   - scipy
   - xarray
   - pyqg>=0.7.2
+  - matplotlib
