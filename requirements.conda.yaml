@@ -1,6 +1,8 @@
 name: eqn-disco
 channels:
+  - defaults
   - anaconda
+  - conda-forge
 dependencies:
   - mypy
   - black
@@ -8,3 +10,10 @@ dependencies:
   - pydocstyle
   - pylint
   - pip
+  - numpy
+  - scikit-learn
+  - gplearn
+  - scipy
+  - xarray
+  - pyqg>=0.7.2
+  - matplotlib
