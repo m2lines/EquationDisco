@@ -229,7 +229,12 @@ class LinearSymbolicRegression(Parameterization):
         return res
 
     @classmethod
-    def fit(cls, data_set, inputs, target="q_subgrid_forcing"):
+    def fit(
+        cls,
+        data_set: xr.Dataset,
+        inputs: List[str],
+        target: str = "q_subgrid_forcing",
+    ):
         """Fit lin-reg param on ``dataset`` in terms of symbolic ``inputs``.
 
         Parameters
