@@ -68,7 +68,7 @@ def run_gplearn_iteration(
 
     Parameters
     ----------
-    date_set : xarray.Dataset
+    data_set : xarray.Dataset
         Dataset generated from pyqg.QGModel runs
     target : numpy.ndarray
         Target spatial field to be predicted from dataset attributes

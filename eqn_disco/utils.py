@@ -1,14 +1,16 @@
 """Utility functions."""
 import operator
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Any
 import re
 import pyqg
 import numpy as np
 import xarray as xr
-
-
 import matplotlib.pyplot as plt
 
+ModelLike = Union[pyqg.Model, xr.Dataset]
+ArrayLike = Union[np.ndarray, xr.DataArray]
+Numeric = Union[ArrayLike, int, float]
+StringOrNumeric = Union[str, Numeric]
 
 class Parameterization(pyqg.Parameterization):
     """Helper class for defining parameterizations.
@@ -37,7 +39,7 @@ class Parameterization(pyqg.Parameterization):
         """
         raise NotImplementedError
 
-    def predict(self) -> Dict[str, Union[np.ndarray, xr.DataArray]]:
+    def predict(self) -> Dict[str, ArrayLike]:
         """Subgrid forcing predictions, as a dictionary of target => array.
 
         Parameters
@@ -70,7 +72,7 @@ class Parameterization(pyqg.Parameterization):
         return 64  # Future work should generalize this.
 
     @property
-    def parameterization_type(self):
+    def parameterization_type(self) -> str:
         """Return the parameterization type.
 
         Returns whether this is a potential vorticity parameterization (i.e.
@@ -89,7 +91,7 @@ class Parameterization(pyqg.Parameterization):
 
         return "uv_parameterization"
 
-    def __call__(self, m):
+    def __call__(self, model : ModelLike) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """Invoke the parameterization in the format required by pyqg.
 
         Parameters
@@ -108,9 +110,9 @@ class Parameterization(pyqg.Parameterization):
 
         """
         ensure_array = lambda x: (x.data if isinstance(x, xr.DataArray) else x).astype(
-            m.q.dtype
+            model.q.dtype
         )
-        preds = self.predict(m)
+        preds = self.predict(model)
         keys = list(sorted(preds.keys()))  # these are the same as our targets
         assert keys == self.targets
 
@@ -122,27 +124,27 @@ class Parameterization(pyqg.Parameterization):
             return ensure_array(preds[keys[0]])
         elif keys == ["uq_subgrid_flux", "vq_subgrid_flux"]:
             # these are PV subgrid fluxes; we need to take their divergence
-            ex = FeatureExtractor(m)
+            extractor = FeatureExtractor(model)
             return ensure_array(
-                ex.ddx(preds["uq_subgrid_flux"]) + ex.ddy(preds["vq_subgrid_flux"])
+                extractor.ddx(preds["uq_subgrid_flux"]) + extractor.ddy(preds["vq_subgrid_flux"])
             )
         elif "uu_subgrid_flux" in keys and len(keys) == 3:
             # these are velocity subgrid fluxes; we need to take two sets of
             # divergences and return a tuple
-            ex = FeatureExtractor(m)
+            extractor = FeatureExtractor(model)
             return (
                 ensure_array(
-                    ex.ddx(preds["uu_subgrid_flux"]) + ex.ddy(preds["uv_subgrid_flux"])
+                    extractor.ddx(preds["uu_subgrid_flux"]) + extractor.ddy(preds["uv_subgrid_flux"])
                 ),
                 ensure_array(
-                    ex.ddx(preds["uv_subgrid_flux"]) + ex.ddy(preds["vv_subgrid_flux"])
+                    extractor.ddx(preds["uv_subgrid_flux"]) + extractor.ddy(preds["vv_subgrid_flux"])
                 ),
             )
         else:
             # this is a "simple" velocity parameterization; return a tuple
             return tuple(ensure_array(preds[k]) for k in keys)
 
-    def run_online(self, sampling_freq=1000, **kw):
+    def run_online(self, sampling_freq : int = 1000, **kwargs) -> xr.Dataset:
         """Initialize and run a parameterized pyqg.QGModel.
 
         Saves snapshots periodically.
@@ -156,44 +158,44 @@ class Parameterization(pyqg.Parameterization):
 
         Returns
         -------
-        ds : xarray.Dataset
+        data_set : xarray.Dataset
             Dataset of parameterized model run snapshots
 
         """
         # Initialize a pyqg model with this parameterization
-        params = dict(kw)
+        params = dict(kwargs)
         params[self.parameterization_type] = self
         params["nx"] = self.spatial_res
-        m = pyqg.QGModel(**params)
+        model = pyqg.QGModel(**params)
 
         # Run it, saving snapshots
         snapshots = []
-        while m.t < m.tmax:
-            if m.tc % sampling_freq == 0:
-                snapshots.append(m.to_dataset().copy(deep=True))
-            m._step_forward()
+        while model.t < m.tmax:
+            if model.tc % sampling_freq == 0:
+                snapshots.append(model.to_dataset().copy(deep=True))
+            model._step_forward()
 
-        ds = xr.concat(snapshots, dim="time")
+        data_set = xr.concat(snapshots, dim="time")
 
         # Diagnostics get dropped by this procedure since they're only present for
         # part of the timeseries; resolve this by saving the most recent
         # diagnostics (they're already time-averaged so this is ok)
         for k, v in snapshots[-1].variables.items():
-            if k not in ds:
-                ds[k] = v.isel(time=-1)
+            if k not in data_set:
+                data_set[k] = v.isel(time=-1)
 
         # Drop complex variables since they're redundant and can't be saved
-        complex_vars = [k for k, v in ds.variables.items() if np.iscomplexobj(v)]
-        ds = ds.drop_vars(complex_vars)
+        complex_vars = [k for k, v in data_set.variables.items() if np.iscomplexobj(v)]
+        data_set = data_set.drop_vars(complex_vars)
 
-        return ds
+        return data_set
 
-    def test_offline(self, dataset):
+    def test_offline(self, data_set: xr.Dataset) -> xr.Dataset:
         """Test offline performance of parameterization on existing dataset.
 
         Parameters
         ----------
-        dataset : xarray.Dataset
+        data_set : xarray.Dataset
             Dataset containing coarsened inputs and subgrid forcing variables
             matching this parameterization's targets.
 
@@ -205,9 +207,9 @@ class Parameterization(pyqg.Parameterization):
             the original dataset).
 
         """
-        test = dataset[self.targets]
+        test = data_set[self.targets]
 
-        for key, val in self.predict(dataset).items():
+        for key, val in self.predict(data_set).items():
             truth = test[key]
             test[f"{key}_predictions"] = truth * 0 + val
             preds = test[f"{key}_predictions"]
@@ -216,10 +218,6 @@ class Parameterization(pyqg.Parameterization):
             true_centered = truth - truth.mean()
             pred_centered = preds - preds.mean()
             true_var = true_centered**2
-
-            # TODO: Find out why these variables are assigned, but unused.
-            pred_var = pred_centered**2
-            true_pred_cov = true_centered * pred_centered
 
             def dims_except(*dims):
                 return [d for d in test[key].dims if d not in dims]
@@ -265,7 +263,7 @@ class FeatureExtractor:
 
     """
 
-    def __call__(self, feature_or_features, flat=False):
+    def __call__(self, feature_or_features : Union[str, List[str]], flat : bool = False):
         """Extract the given feature/features from underlying dataset/ model.
 
         Parameters
@@ -294,7 +292,7 @@ class FeatureExtractor:
                 res = res.reshape(len(feature_or_features), -1).T
         return res
 
-    def __init__(self, model_or_dataset):
+    def __init__(self, model_or_dataset: ModelLike):
         """Build ``FeatureExtractor``."""
         self.m = model_or_dataset
         self.cache = {}
@@ -313,50 +311,64 @@ class FeatureExtractor:
         self.wv2 = self.ik**2 + self.il**2
 
     # Helpers for taking FFTs / deciding if we need to
-    # TODO: Populate docstring.
-    def fft(self, x):
+    def fft(self, x : ArrayLike) -> ArrayLike:
         """Compute the FFT of ``x``.
 
         Parameters
         ----------
-        x : ?
-            Description.
+        x : Union[numpy.ndarray, xarray.DataArray]
+            An input array in real space
 
         Returns
         -------
-        ?
+        fft : Union[numpy.ndarray, xarray.DataArray]
+            An output array in spectral space
 
         """
-        # TODO: avoid naked except.
         try:
+            # pyqg.Models will respond to `fft` (which might be pyFFTW, which is fast)
             return self.m.fft(x)
-        except:
-            # Convert to data array
+        except AttributeError:
+            # if we got an attribute error, that means we have an xarray.Dataset.
+            # use numpy FFTs and return a data array instead.
             dims = [dict(y="l", x="k").get(d, d) for d in self["q"].dims]
             coords = dict([(d, self[d]) for d in dims])
             return xr.DataArray(
                 np.fft.rfftn(x, axes=(-2, -1)), dims=dims, coords=coords
             )
 
-    def ifft(self, x):
+    def ifft(self, x : ArrayLike) -> ArrayLike:
+        """Compute the inverse FFT of ``x``.
+
+        Parameters
+        ----------
+        x : Union[numpy.ndarray, xarray.DataArray]
+            An input array in spectral space
+
+        Returns
+        -------
+        ifft : Union[numpy.ndarray, xarray.DataArray]
+            An output array in real space
+
+        """
         try:
             return self.m.ifft(x)
-        except:
+        except AttributeError:
             return self["q"] * 0 + np.fft.irfftn(x, axes=(-2, -1))
 
-    def is_real(self, arr):
+    def is_real(self, arr : ArrayLike) -> bool:
         return len(set(arr.shape[-2:])) == 1
 
-    def real(self, arr):
-        arr = self[arr]
+    def real(self, feature : StringOrNumeric) -> ArrayLike:
+        arr = self[feature]
         if isinstance(arr, float):
             return arr
         if self.is_real(arr):
             return arr
         return self.ifft(arr)
 
-    def compl(self, arr):
-        arr = self[arr]
+    def compl(self, feature : StringOrNumeric) -> ArrayLike:
+        arr = self[feature]
         if isinstance(arr, float):
             return arr
         if self.is_real(arr):
@@ -364,58 +376,104 @@ class FeatureExtractor:
         return arr
 
     # Spectral derivatrives
-    def ddxh(self, f):
+    def ddxh(self, f : StringOrNumeric) -> ArrayLike:
         return self.ik * self.compl(f)
 
-    def ddyh(self, f):
+    def ddyh(self, f : StringOrNumeric) -> ArrayLike:
         return self.il * self.compl(f)
 
-    def divh(self, x, y):
+    def divh(self, x : StringOrNumeric, y : StringOrNumeric) -> ArrayLike:
         return self.ddxh(x) + self.ddyh(y)
 
-    def curlh(self, x, y):
+    def curlh(self, x : StringOrNumeric, y : StringOrNumeric) -> ArrayLike:
         return self.ddxh(y) - self.ddyh(x)
 
-    def laplacianh(self, x):
+    def laplacianh(self, x : StringOrNumeric) -> ArrayLike:
         return self.wv2 * self.compl(x)
 
-    def advectedh(self, x_):
+    def advectedh(self, x_ : StringOrNumeric) -> ArrayLike:
         x = self.real(x_)
         return self.ddxh(x * self.m.ufull) + self.ddyh(x * self.m.vfull)
 
     # Real counterparts
-    def ddx(self, f):
+    def ddx(self, f : StringOrNumeric) -> ArrayLike:
         return self.real(self.ddxh(f))
 
-    def ddy(self, f):
+    def ddy(self, f : StringOrNumeric) -> ArrayLike:
         return self.real(self.ddyh(f))
 
-    def laplacian(self, x):
+    def laplacian(self, x : StringOrNumeric) -> ArrayLike:
         return self.real(self.laplacianh(x))
 
-    def advected(self, x):
+    def advected(self, x : StringOrNumeric) -> ArrayLike:
         return self.real(self.advectedh(x))
 
-    def curl(self, x, y):
+    def curl(self, x : StringOrNumeric, y : StringOrNumeric) -> ArrayLike:
         return self.real(self.curlh(x, y))
 
-    def div(self, x, y):
+    def div(self, x : StringOrNumeric, y : StringOrNumeric) -> ArrayLike:
         return self.real(self.divh(x, y))
 
     # Main function: interpreting a string as a feature
-    def extract_feature(self, feature):
-        """Evaluate a string feature, e.g. laplacian(advected(curl(u,v))).
+    def extract_feature(self, feature : str) -> Numeric:
+        """Evaluate a string expression and convert it to a number or array.
+
+        Examples of valid string expressions include:
+
+            "1.053"
+            "q"
+            "u"
+            "add(u, 1.053)"
+            "mul(u, add(q, u))"
+            "laplacian(advected(curl(u, v)))"
+
+        More formally, features should obey the following grammar (with
+        additional whitespace allowed within expressions):
+
+            feature
+                unary_expression | binary_expression | number | variable_name
+            unary_expression
+                unary_operator "(" feature ")"
+            binary_expression
+                binary_operator "(" feature "," feature ")"
+            unary_operator
+                "neg" | "abs" | "ddx" | "ddy" | "advected" | "laplacian"
+            binary_operator
+                "mul" | "add" | "sub" | "pow" | "div" | "curl"
+            number
+                [\-\d\.]+
+            variable_name
+                .*
+
+        Essentially, features should either be numbers, atomic variables (that
+        get passed directly to the underlying model), or unary/binary operators
+        applied to features.
+
+        The specific operators supported are:
+            - ``neg``, which negates the expression
+            - ``abs``, which takes the absolute bvalue
+            - ``ddx``, which takes the horizontal derivative
+            - ``ddy``, which takes the vertical derivative
+            - ``advected``, which applies advection to the expression
+            - ``laplacian``, which takes the Laplacian of the expression
+            - ``mul``, which multiplies two expressions
+            - ``add``, which adds two expressions
+            - ``sub``, which subtracts the second expression from the first
+            - ``pow``, which takes the first expression to the power of the second
+            - ``div``, which takes the divergence of the vector field whose x and y components are given by the two expressions, respectively
+            - ``curl``, which takes the curl of the vector field whose x and y components are given by the two expressions, respectively
 
         Parameters
         ----------
-        feature : ???
-            Presumably this is a string giving operations. Add documentation
-            about how it should be formatted.
+        feature : str
+            String representing a mathematical expression to be evaluated,
+            matching the feature extraction grammar.
 
         Returns
         -------
-        ???
-
+        numeric : Union[numpy.ndarray, xarray.DataArray, int, float]
+            Numeric or array-like expression representing the value of the
+            feature.
         """
         # Helper to recurse on each side of an arity-2 expression
         def extract_pair(s):
@@ -463,25 +521,24 @@ class FeatureExtractor:
 
         return self[feature]
 
-    def extracted(self, key):
+    def extracted(self, key : str) -> bool:
         return key in self.cache or hasattr(self.m, key)
 
     # A bit of additional hackery to allow for the reading of features or properties
-    # TODO: replace q with more meaningful name
-    def __getitem__(self, q):
-        if isinstance(q, str):
-            if q in self.cache:
-                return self.cache[q]
-            elif re.search(r"^[\-\d\.]+$", q):
-                return float(q)
+    def __getitem__(self, attribute : StringOrNumeric) -> Any:
+        if isinstance(attribute, str):
+            if attribute in self.cache:
+                return self.cache[attribute]
+            elif re.search(r"^[\-\d\.]+$", attribute):
+                return float(attribute)
             else:
-                return getattr(self.m, q)
+                return getattr(self.m, attribute)
         elif any(
-            [isinstance(q, kls) for kls in [xr.DataArray, np.ndarray, int, float]]
+            [isinstance(attribute, kls) for kls in [xr.DataArray, np.ndarray, int, float]]
         ):
-            return q
+            return attribute
         else:
-            raise KeyError(q)
+            raise KeyError(attribute)
 
 
 def energy_budget_term(model, term):
@@ -492,7 +549,6 @@ def energy_budget_term(model, term):
 
 
 def energy_budget_figure(models, skip=0):
-
     fig = plt.figure(figsize=(12, 5))
     vmax = 0
     for i, term in enumerate(["KEflux", "APEflux", "APEgenspec", "KEfrictionspec"]):
