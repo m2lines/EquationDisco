@@ -12,6 +12,7 @@ ArrayLike = Union[np.ndarray, xr.DataArray]
 Numeric = Union[ArrayLike, int, float]
 StringOrNumeric = Union[str, Numeric]
 
+
 class Parameterization(pyqg.Parameterization):
     """Helper class for defining parameterizations.
 
@@ -91,7 +92,9 @@ class Parameterization(pyqg.Parameterization):
 
         return "uv_parameterization"
 
-    def __call__(self, model : ModelLike) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+    def __call__(
+        self, model: ModelLike
+    ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """Invoke the parameterization in the format required by pyqg.
 
         Parameters
@@ -126,7 +129,8 @@ class Parameterization(pyqg.Parameterization):
             # these are PV subgrid fluxes; we need to take their divergence
             extractor = FeatureExtractor(model)
             return ensure_array(
-                extractor.ddx(preds["uq_subgrid_flux"]) + extractor.ddy(preds["vq_subgrid_flux"])
+                extractor.ddx(preds["uq_subgrid_flux"])
+                + extractor.ddy(preds["vq_subgrid_flux"])
             )
         elif "uu_subgrid_flux" in keys and len(keys) == 3:
             # these are velocity subgrid fluxes; we need to take two sets of
@@ -134,17 +138,19 @@ class Parameterization(pyqg.Parameterization):
             extractor = FeatureExtractor(model)
             return (
                 ensure_array(
-                    extractor.ddx(preds["uu_subgrid_flux"]) + extractor.ddy(preds["uv_subgrid_flux"])
+                    extractor.ddx(preds["uu_subgrid_flux"])
+                    + extractor.ddy(preds["uv_subgrid_flux"])
                 ),
                 ensure_array(
-                    extractor.ddx(preds["uv_subgrid_flux"]) + extractor.ddy(preds["vv_subgrid_flux"])
+                    extractor.ddx(preds["uv_subgrid_flux"])
+                    + extractor.ddy(preds["vv_subgrid_flux"])
                 ),
             )
         else:
             # this is a "simple" velocity parameterization; return a tuple
             return tuple(ensure_array(preds[k]) for k in keys)
 
-    def run_online(self, sampling_freq : int = 1000, **kwargs) -> xr.Dataset:
+    def run_online(self, sampling_freq: int = 1000, **kwargs) -> xr.Dataset:
         """Initialize and run a parameterized pyqg.QGModel.
 
         Saves snapshots periodically.
@@ -263,7 +269,7 @@ class FeatureExtractor:
 
     """
 
-    def __call__(self, feature_or_features : Union[str, List[str]], flat : bool = False):
+    def __call__(self, feature_or_features: Union[str, List[str]], flat: bool = False):
         """Extract the given feature/features from underlying dataset/ model.
 
         Parameters
@@ -311,7 +317,7 @@ class FeatureExtractor:
         self.wv2 = self.ik**2 + self.il**2
 
     # Helpers for taking FFTs / deciding if we need to
-    def fft(self, x : ArrayLike) -> ArrayLike:
+    def fft(self, x: ArrayLike) -> ArrayLike:
         """Compute the FFT of ``x``.
 
         Parameters
@@ -337,7 +343,7 @@ class FeatureExtractor:
                 np.fft.rfftn(x, axes=(-2, -1)), dims=dims, coords=coords
             )
 
-    def ifft(self, x : ArrayLike) -> ArrayLike:
+    def ifft(self, x: ArrayLike) -> ArrayLike:
         """Compute the inverse FFT of ``x``.
 
         Parameters
@@ -356,10 +362,10 @@ class FeatureExtractor:
         except AttributeError:
             return self["q"] * 0 + np.fft.irfftn(x, axes=(-2, -1))
 
-    def is_real(self, arr : ArrayLike) -> bool:
+    def is_real(self, arr: ArrayLike) -> bool:
         return len(set(arr.shape[-2:])) == 1
 
-    def real(self, feature : StringOrNumeric) -> ArrayLike:
+    def real(self, feature: StringOrNumeric) -> ArrayLike:
         arr = self[feature]
         if isinstance(arr, float):
             return arr
@@ -367,7 +373,7 @@ class FeatureExtractor:
             return arr
         return self.ifft(arr)
 
-    def compl(self, feature : StringOrNumeric) -> ArrayLike:
+    def compl(self, feature: StringOrNumeric) -> ArrayLike:
         arr = self[feature]
         if isinstance(arr, float):
             return arr
@@ -376,46 +382,46 @@ class FeatureExtractor:
         return arr
 
     # Spectral derivatrives
-    def ddxh(self, f : StringOrNumeric) -> ArrayLike:
+    def ddxh(self, f: StringOrNumeric) -> ArrayLike:
         return self.ik * self.compl(f)
 
-    def ddyh(self, f : StringOrNumeric) -> ArrayLike:
+    def ddyh(self, f: StringOrNumeric) -> ArrayLike:
         return self.il * self.compl(f)
 
-    def divh(self, x : StringOrNumeric, y : StringOrNumeric) -> ArrayLike:
+    def divh(self, x: StringOrNumeric, y: StringOrNumeric) -> ArrayLike:
         return self.ddxh(x) + self.ddyh(y)
 
-    def curlh(self, x : StringOrNumeric, y : StringOrNumeric) -> ArrayLike:
+    def curlh(self, x: StringOrNumeric, y: StringOrNumeric) -> ArrayLike:
         return self.ddxh(y) - self.ddyh(x)
 
-    def laplacianh(self, x : StringOrNumeric) -> ArrayLike:
+    def laplacianh(self, x: StringOrNumeric) -> ArrayLike:
         return self.wv2 * self.compl(x)
 
-    def advectedh(self, x_ : StringOrNumeric) -> ArrayLike:
+    def advectedh(self, x_: StringOrNumeric) -> ArrayLike:
         x = self.real(x_)
         return self.ddxh(x * self.m.ufull) + self.ddyh(x * self.m.vfull)
 
     # Real counterparts
-    def ddx(self, f : StringOrNumeric) -> ArrayLike:
+    def ddx(self, f: StringOrNumeric) -> ArrayLike:
         return self.real(self.ddxh(f))
 
-    def ddy(self, f : StringOrNumeric) -> ArrayLike:
+    def ddy(self, f: StringOrNumeric) -> ArrayLike:
         return self.real(self.ddyh(f))
 
-    def laplacian(self, x : StringOrNumeric) -> ArrayLike:
+    def laplacian(self, x: StringOrNumeric) -> ArrayLike:
         return self.real(self.laplacianh(x))
 
-    def advected(self, x : StringOrNumeric) -> ArrayLike:
+    def advected(self, x: StringOrNumeric) -> ArrayLike:
         return self.real(self.advectedh(x))
 
-    def curl(self, x : StringOrNumeric, y : StringOrNumeric) -> ArrayLike:
+    def curl(self, x: StringOrNumeric, y: StringOrNumeric) -> ArrayLike:
         return self.real(self.curlh(x, y))
 
-    def div(self, x : StringOrNumeric, y : StringOrNumeric) -> ArrayLike:
+    def div(self, x: StringOrNumeric, y: StringOrNumeric) -> ArrayLike:
         return self.real(self.divh(x, y))
 
     # Main function: interpreting a string as a feature
-    def extract_feature(self, feature : str) -> Numeric:
+    def extract_feature(self, feature: str) -> Numeric:
         """Evaluate a string expression and convert it to a number or array.
 
         Examples of valid string expressions include:
@@ -521,11 +527,11 @@ class FeatureExtractor:
 
         return self[feature]
 
-    def extracted(self, key : str) -> bool:
+    def extracted(self, key: str) -> bool:
         return key in self.cache or hasattr(self.m, key)
 
     # A bit of additional hackery to allow for the reading of features or properties
-    def __getitem__(self, attribute : StringOrNumeric) -> Any:
+    def __getitem__(self, attribute: StringOrNumeric) -> Any:
         if isinstance(attribute, str):
             if attribute in self.cache:
                 return self.cache[attribute]
@@ -534,7 +540,10 @@ class FeatureExtractor:
             else:
                 return getattr(self.m, attribute)
         elif any(
-            [isinstance(attribute, kls) for kls in [xr.DataArray, np.ndarray, int, float]]
+            [
+                isinstance(attribute, kls)
+                for kls in [xr.DataArray, np.ndarray, int, float]
+            ]
         ):
             return attribute
         else:
