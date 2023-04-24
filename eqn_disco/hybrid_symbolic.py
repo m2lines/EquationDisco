@@ -33,7 +33,7 @@ def make_custom_gplearn_functions(data_set: xr.Dataset):
     """
     extractor = FeatureExtractor(data_set)
 
-    # TODO: Give ``r`` and ``x`` more meaningful names.
+    # TODO: What are r and x?
     # TODO: Add a docstring.
     def apply_spatial(func, x):
         r = func(x.reshape(data_set.q.shape))
