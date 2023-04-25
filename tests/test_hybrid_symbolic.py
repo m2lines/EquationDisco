@@ -1,7 +1,7 @@
 import pyqg
 import numpy as np
 import xarray as xr
-from eqn_disco.hybrid_symbolic import LinearSymbolicRegression
+from eqn_disco.hybrid_symbolic import LinearSymbolicRegression, run_gplearn_iteration
 from eqn_disco.utils import FeatureExtractor
 
 def test_linear_symbolic():
@@ -27,3 +27,45 @@ def test_linear_symbolic():
 
     model2 = pyqg.QGModel(parameterization=parameterization)
     model2._step_forward()
+
+def test_run_gplearn_iteration():
+    grid_length = 8
+    num_samples = 20
+    grid = np.linspace(0, 1, grid_length)
+    x, y = np.meshgrid(grid, grid)
+    inputs = np.random.normal(size=(num_samples, grid_length, grid_length))
+    l = 2 * np.pi * np.append(np.arange(0., grid_length/2), np.arange(-grid_length/2, 0.))
+    k = 2 * np.pi * np.arange(0., grid_length/2 + 1)
+
+    data_set = xr.Dataset(
+        data_vars=dict(
+            inputs=(('batch', 'y', 'x'), inputs),
+        ),
+        coords=dict(
+            x=grid,
+            y=grid,
+            l=l,
+            k=k,
+            batch=np.arange(num_samples)
+        )
+    )
+
+    extractor = FeatureExtractor(data_set, example_realspace_input="inputs")
+
+    target = extractor.extract_feature('ddx(inputs)').data
+
+    regressor = run_gplearn_iteration(
+       data_set,
+       target,
+       base_feats=['inputs'],
+       base_funcs=[],
+       spatial_funcs=['ddx'],
+       population_size=100,
+       generations=10,
+       metric='mse',
+       random_state=42
+    )
+
+    result = str(regressor._program)
+
+    assert result == 'ddx(inputs)'

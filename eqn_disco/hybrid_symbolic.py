@@ -1,5 +1,6 @@
 """Hybrid symbolic module."""
 from typing import Optional, List, Dict, Any, Union, Tuple
+from collections.abc import Callable
 
 from gplearn.functions import _Function as Function
 
@@ -11,18 +12,17 @@ from sklearn.linear_model import LinearRegression
 
 import pyqg
 
-from .utils import FeatureExtractor, Parameterization
+from .utils import FeatureExtractor, Parameterization, ArrayLike, ensure_numpy
 
 
-def make_custom_gplearn_functions(data_set: xr.Dataset):
+def make_custom_gplearn_functions(data_set: xr.Dataset, spatial_funcs: List[str]):
     """Define custom gplearn functions for spatial derivatives.
-
-    The functions are specific to the spatial shape of that particular dataset.
 
     Parameters
     ----------
-    data_set : xarray.Dataset
-        Dataset generated from pyqg.QGModel runs
+    spatial_shape : Tuple[int, ...]
+        Shape indicating how we should unflatten inputs so they can be
+        interpreted as spatial fields.
 
     Returns
     -------
@@ -33,27 +33,20 @@ def make_custom_gplearn_functions(data_set: xr.Dataset):
     """
     extractor = FeatureExtractor(data_set)
 
-    # TODO: What are r and x?
-    # TODO: Add a docstring.
-    def apply_spatial(func, x):
-        r = func(x.reshape(data_set.q.shape))
-        if isinstance(r, xr.DataArray):
-            r = r.data
-        return r.reshape(x.shape)
-
-    funcs = {
-        "ddx": lambda x: apply_spatial(extractor.ddx, x),
-        "ddy": lambda x: apply_spatial(extractor.ddy, x),
-        "lap": lambda x: apply_spatial(extractor.laplacian, x),
-        "adv": lambda x: apply_spatial(extractor.advected, x),
-    }
+    def apply_spatial(spatial_function: Callable, flat_array: ArrayLike) -> np.ndarray:
+        """Apply a `spatial_function` to an initially `flat_array`."""
+        spatial_array = flat_array.reshape(extractor.spatial_shape)
+        spatial_output = ensure_numpy(spatial_function(spatial_array))
+        return spatial_output.reshape(flat_array.shape)
 
     # create gplearn function objects to represent these transformations
     return [
-        Function(function=funcs["ddx"], name="ddx", arity=1),
-        Function(function=funcs["ddy"], name="ddy", arity=1),
-        Function(function=funcs["lap"], name="laplacian", arity=1),
-        Function(function=funcs["adv"], name="advected", arity=1),
+        Function(
+            function=lambda x: apply_spatial(getattr(extractor, spatial_func_name), x),
+            name=spatial_func_name,
+            arity=1
+        )
+        for spatial_func_name in spatial_funcs
     ]
 
 
@@ -62,6 +55,7 @@ def run_gplearn_iteration(
     target: np.ndarray,
     base_feats: Optional[List[str]] = None,
     base_funcs: Optional[List[str]] = None,
+    spatial_funcs: Optional[List[str]] = None,
     **kwargs: Dict[str, Any],
 ):
     """Run gplearn for one iteration using custom spatial derivatives.
@@ -74,10 +68,14 @@ def run_gplearn_iteration(
         Target spatial field to be predicted from dataset attributes
     base_features : List[str]
         Features from the dataset to be used as the initial set of atomic
-        inputs to genetic programming
+        inputs to genetic programming. Defaults to ['q', 'u', 'v'].
     base_functions : List[str]
         Names of gplearn built-in functions to explore during genetic
-        programming (in addition to differential operators)
+        programming (in addition to differential operators). Defaults to
+        ['add', 'mul'].
+    spatial_functions : List[str]
+        Names of spatial differential operators to explore during genetic
+        programming. Defaults to ['ddx', 'ddy', 'laplacian', 'advected'].
     **kwargs : dict
         Additional arguments to pass to gplearn.genetic.SymbolicRegressor
 
@@ -90,6 +88,8 @@ def run_gplearn_iteration(
     """
     base_feats = ["q", "u", "v"] if base_feats is None else base_feats
     base_funcs = ["add", "mul"] if base_funcs is None else base_funcs
+    spatial_funcs = make_custom_gplearn_functions(data_set, spatial_funcs)
+
 
     # Flatten the input and target data
     inputs = np.array([data_set[feature].data.reshape(-1) for feature in base_feats]).T
@@ -116,9 +116,7 @@ def run_gplearn_iteration(
     # TODO: Can we rename ``sr`` to ``symbolic_regression``?
     sr = gplearn.genetic.SymbolicRegressor(
         feature_names=base_feats,
-        function_set=(
-            base_funcs + make_custom_gplearn_functions(data_set)  # use our custom ops
-        ),
+        function_set=base_funcs + spatial_funcs,  # use our custom ops
         **gplearn_kwargs,
     )
 

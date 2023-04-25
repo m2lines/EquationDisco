@@ -1,6 +1,6 @@
 """Utility functions."""
 import operator
-from typing import List, Dict, Union, Any
+from typing import List, Dict, Union, Any, Tuple, Optional
 import re
 import pyqg
 import numpy as np
@@ -11,6 +11,26 @@ ModelLike = Union[pyqg.Model, xr.Dataset]
 ArrayLike = Union[np.ndarray, xr.DataArray]
 Numeric = Union[ArrayLike, int, float]
 StringOrNumeric = Union[str, Numeric]
+
+
+def ensure_numpy(array: ArrayLike) -> np.ndarray:
+    """Helper to ensure that a given array-like input (numpy ndarray or xarray
+    DataArray) is converted to numpy format.
+
+    Parameters
+    ----------
+    array : Union[numpy.ndarray, xarray.DataArray]
+        Input array
+
+    Returns
+    -------
+    numpy.ndarray
+        Numpy representation of input array
+    """
+    if isinstance(array, xr.DataArray):
+        return array.data
+    else:
+        return array
 
 
 class Parameterization(pyqg.Parameterization):
@@ -112,9 +132,7 @@ class Parameterization(pyqg.Parameterization):
            type as the model's PV variable.
 
         """
-        ensure_array = lambda x: (x.data if isinstance(x, xr.DataArray) else x).astype(
-            model.q.dtype
-        )
+        ensure_array = lambda x: ensure_numpy(x).astype(model.q.dtype)
         preds = self.predict(model)
         keys = list(sorted(preds.keys()))  # these are the same as our targets
         assert keys == self.targets
@@ -286,22 +304,33 @@ class FeatureExtractor:
             Array of values of corresponding features.
 
         """
-        arr = lambda x: x.data if isinstance(x, xr.DataArray) else x
         if isinstance(feature_or_features, str):
-            res = arr(self.extract_feature(feature_or_features))
+            res = ensure_numpy(self.extract_feature(feature_or_features))
             if flat:
                 res = res.reshape(-1)
 
         else:
-            res = np.array([arr(self.extract_feature(f)) for f in feature_or_features])
+            res = np.array([ensure_numpy(self.extract_feature(f)) for f in feature_or_features])
             if flat:
                 res = res.reshape(len(feature_or_features), -1).T
         return res
 
-    def __init__(self, model_or_dataset: ModelLike):
+    def __init__(self, model_or_dataset: ModelLike, example_realspace_input: Optional[str] = None):
         """Build ``FeatureExtractor``."""
         self.m = model_or_dataset
         self.cache = {}
+
+        assert hasattr(self.m, "x"), "dataset must have horizontal realspace dimension"
+        assert hasattr(self.m, "k"), "dataset must have horizontal spectral dimension"
+        assert hasattr(self.m, "y"), "dataset must have vertical realspace dimension"
+        assert hasattr(self.m, "l"), "dataset must have vertical spectral dimension"
+
+        if example_realspace_input is None:
+            if hasattr(self.m, "q"):
+                example_realspace_input = "q"
+            elif isinstance(self.m, xr.Dataset):
+                example_realspace_input = next(key for key, val in self.m.items() if 'x' in val.dims)
+        self.example_realspace_input = getattr(self.m, example_realspace_input)
 
         if hasattr(self.m, "_ik"):
             self.ik, self.il = np.meshgrid(self.m._ik, self.m._il)
@@ -337,11 +366,23 @@ class FeatureExtractor:
         except AttributeError:
             # if we got an attribute error, that means we have an xarray.Dataset.
             # use numpy FFTs and return a data array instead.
-            dims = [dict(y="l", x="k").get(d, d) for d in self["q"].dims]
+            dims = self.spectral_dims
             coords = dict([(d, self[d]) for d in dims])
             return xr.DataArray(
                 np.fft.rfftn(x, axes=(-2, -1)), dims=dims, coords=coords
             )
+
+    @property
+    def spatial_shape(self) -> Tuple[int, ...]:
+        return self.example_realspace_input.shape
+
+    @property
+    def spatial_dims(self) -> Tuple[str, ...]:
+        return self.example_realspace_input.dims
+
+    @property
+    def spectral_dims(self) -> Tuple[str, ...]:
+        return [dict(y="l", x="k").get(d, d) for d in self.spatial_dims]
 
     def ifft(self, x: ArrayLike) -> ArrayLike:
         """Compute the inverse FFT of ``x``.
@@ -360,7 +401,7 @@ class FeatureExtractor:
         try:
             return self.m.ifft(x)
         except AttributeError:
-            return self["q"] * 0 + np.fft.irfftn(x, axes=(-2, -1))
+            return self.example_realspace_input * 0 + np.fft.irfftn(x, axes=(-2, -1))
 
     def is_real(self, arr: ArrayLike) -> bool:
         return len(set(arr.shape[-2:])) == 1
