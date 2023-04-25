@@ -2,15 +2,20 @@
 import operator
 from typing import List, Dict, Union, Any, Tuple, Optional
 import re
-import pyqg
+try:
+    import pyqg
+    imported_pyqg = True
+except ImportError:
+    imported_pyqg = False
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 
-ModelLike = Union[pyqg.Model, xr.Dataset]
+ModelLike = Union[pyqg.Model, xr.Dataset] if imported_pyqg else xr.Dataset
 ArrayLike = Union[np.ndarray, xr.DataArray]
 Numeric = Union[ArrayLike, int, float]
 StringOrNumeric = Union[str, Numeric]
+ParameterizationSuperclass = pyqg.Parameterization if imported_pyqg else object
 
 
 def ensure_numpy(array: ArrayLike) -> np.ndarray:
@@ -33,7 +38,7 @@ def ensure_numpy(array: ArrayLike) -> np.ndarray:
         return array
 
 
-class Parameterization(pyqg.Parameterization):
+class Parameterization(ParameterizationSuperclass):
     """Helper class for defining parameterizations.
 
     This extends the normal pyqg parameterization framework to handle
@@ -78,20 +83,6 @@ class Parameterization(pyqg.Parameterization):
 
         """
         raise NotImplementedError
-
-    @property
-    def spatial_res(self) -> int:
-        """Spatial res of pyqg.QGModel to which this parameterization applies.
-
-        Currently only supports 64 to replicate the paper, but could be easily
-        extended.
-
-        Returns
-        -------
-        int
-            Spatial resolution, i.e. pyqg.QGModel.nx
-        """
-        return 64  # Future work should generalize this.
 
     @property
     def parameterization_type(self) -> str:
@@ -169,7 +160,7 @@ class Parameterization(pyqg.Parameterization):
             # this is a "simple" velocity parameterization; return a tuple
             return tuple(ensure_array(preds[k]) for k in keys)
 
-    def run_online(self, sampling_freq: int = 1000, **kwargs) -> xr.Dataset:
+    def run_online(self, sampling_freq: int = 1000, nx : int = 64, **kwargs) -> xr.Dataset:
         """Initialize and run a parameterized pyqg.QGModel.
 
         Saves snapshots periodically.
@@ -177,9 +168,12 @@ class Parameterization(pyqg.Parameterization):
         Parameters
         ----------
         sampling_freq : int
-            Number of timesteps (hours) between saving snapshots.
+            Number of timesteps (hours) between saving snapshots. Defaults to
+            1000.
+        spatial_res : int
+            Number of horizontal grid points for the model. Defaults to 64.
         **kwargs : dict
-            Simulation parameters to pass to pyqg.QGModel.
+            Other simulation parameters to pass to pyqg.QGModel.
 
         Returns
         -------
@@ -187,10 +181,12 @@ class Parameterization(pyqg.Parameterization):
             Dataset of parameterized model run snapshots
 
         """
+        assert imported_pyqg, "pyqg must be installed to run this method"
+
         # Initialize a pyqg model with this parameterization
         params = dict(kwargs)
         params[self.parameterization_type] = self
-        params["nx"] = self.spatial_res
+        params["nx"] = nx
         model = pyqg.QGModel(**params)
 
         # Run it, saving snapshots

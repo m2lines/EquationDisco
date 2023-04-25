@@ -299,7 +299,7 @@ def hybrid_symbolic_regression(  # pylint: disable=too-many-locals
 ) -> Tuple[List[str], List[LinearRegression]]:
     """Run hybrid symbolic and linear regression.
 
-    Uses symbolic regression to find expressions correlated wit the output,
+    Uses symbolic regression to find expressions correlated with the output,
     then fitting linear regression to get an exact expression, then running
     symbolic regression again on the resulting residuals (repeating until
     ``max_iters``).
