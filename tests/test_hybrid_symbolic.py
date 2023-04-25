@@ -57,9 +57,9 @@ def test_run_gplearn_iteration():
     regressor = run_gplearn_iteration(
        data_set,
        target,
-       base_feats=['inputs'],
-       base_funcs=[],
-       spatial_funcs=['ddx'],
+       base_features=['inputs'],
+       base_functions=[],
+       spatial_functions=['ddx'],
        population_size=100,
        generations=10,
        metric='mse',

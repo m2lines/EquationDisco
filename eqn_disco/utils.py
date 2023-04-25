@@ -60,13 +60,14 @@ class Parameterization(pyqg.Parameterization):
         """
         raise NotImplementedError
 
-    def predict(self) -> Dict[str, ArrayLike]:
+    def predict(self, model_or_dataset: ModelLike) -> Dict[str, ArrayLike]:
         """Subgrid forcing predictions, as a dictionary of target => array.
 
         Parameters
         ----------
-        model : Union[pyqg.QGModel, xarray.Dataset]
-            Model for which we are making subgrid forcing predictions.
+        model_or_dataset : Union[pyqg.QGModel, xarray.Dataset]
+            Model or dataset for which we are making subgrid forcing
+            predictions.
 
         Returns
         -------
