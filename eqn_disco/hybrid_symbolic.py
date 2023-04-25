@@ -1,6 +1,5 @@
 """Hybrid symbolic module."""
-from typing import Optional, List, Dict, Any, Union, Tuple
-from collections.abc import Callable
+from typing import Optional, List, Dict, Any, Tuple
 
 import gplearn.genetic
 from gplearn.functions import _Function as Function
@@ -43,7 +42,7 @@ def make_custom_gplearn_functions(data_set: xr.Dataset, spatial_funcs: List[str]
 
     return [
         Function(
-            function=lambda x: apply_spatial(function_name, x),
+            function=lambda x, name=function_name: apply_spatial(name, x),
             name=function_name,
             arity=1
         )
@@ -153,6 +152,7 @@ class LinearSymbolicRegression(Parameterization):
         self.models = models
         self.inputs = inputs
         self.target = target
+        super().__init__()
 
     @property
     def targets(self) -> List[str]:
@@ -185,21 +185,21 @@ class LinearSymbolicRegression(Parameterization):
         """
         extract = FeatureExtractor(model_or_dataset)
 
-        x = extract(self.inputs)
+        inputs = extract(self.inputs)
 
         preds = []
 
         # Do some slightly annoying reshaping to properly apply LR coefficients
         # to data that may or may not have extra batch dimensions
         for idx, lr_model in enumerate(self.models):
-            data_indices = [slice(None) for _ in x.shape]
+            data_indices = [slice(None) for _ in inputs.shape]
             data_indices[-3] = idx
-            x_z = x[tuple(data_indices)]
-            coef_indices = [np.newaxis for _ in x_z.shape]
+            layer_inputs = inputs[tuple(data_indices)]
+            coef_indices = [np.newaxis for _ in layer_inputs.shape]
             coef_indices[0] = slice(None)
-            c_z = lr_model.coef_[tuple(coef_indices)]
-            pred_z = (x_z * c_z).sum(axis=0)
-            preds.append(pred_z)
+            layer_coefs = lr_model.coef_[tuple(coef_indices)]
+            layer_preds = (layer_inputs * layer_coefs).sum(axis=0)
+            preds.append(layer_preds)
 
         preds = np.stack(preds, axis=-3)
         res = {}
@@ -265,8 +265,8 @@ def each_layer(
     """
     if 'lev' in data_set:
         return [data_set.isel(lev=z) for z in range(len(data_set.lev))]
-    else:
-        return [data_set]
+
+    return [data_set]
 
 
 def corr(spatial_data_a: xr.DataArray, spatial_data_b: xr.DataArray) -> float:
@@ -336,7 +336,7 @@ def hybrid_symbolic_regression(  # pylint: disable=too-many-locals
                 symbolic_regressor = run_gplearn_iteration(
                     data_set_layer, target=residual_layer, **kw
                 )
-                new_term = str(symbolic_regressor._program)
+                new_term = str(symbolic_regressor._program)  # pylint: disable=protected-access
                 new_vals = extract(new_term)
                 # Prevent spurious duplicates, e.g. ddx(q) and ddx(add(1,q))
                 if not any(corr(new_vals, v) > 0.99 for v in vals):
