@@ -4,18 +4,18 @@ from typing import List, Dict, Union, Any, Tuple, Optional
 import re
 try:
     import pyqg
-    imported_pyqg = True
+    IMPORTED_PYQG = True
 except ImportError:
-    imported_pyqg = False
+    IMPORTED_PYQG = False
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 
-ModelLike = Union[pyqg.Model, xr.Dataset] if imported_pyqg else xr.Dataset
+ModelLike = Union[pyqg.Model, xr.Dataset] if IMPORTED_PYQG else xr.Dataset
 ArrayLike = Union[np.ndarray, xr.DataArray]
 Numeric = Union[ArrayLike, int, float]
 StringOrNumeric = Union[str, Numeric]
-ParameterizationSuperclass = pyqg.Parameterization if imported_pyqg else object
+ParameterizationSuperclass = pyqg.Parameterization if IMPORTED_PYQG else object
 
 
 def ensure_numpy(array: ArrayLike) -> np.ndarray:
@@ -34,8 +34,7 @@ def ensure_numpy(array: ArrayLike) -> np.ndarray:
     """
     if isinstance(array, xr.DataArray):
         return array.data
-    else:
-        return array
+    return array
 
 
 class Parameterization(ParameterizationSuperclass):
@@ -181,7 +180,7 @@ class Parameterization(ParameterizationSuperclass):
             Dataset of parameterized model run snapshots
 
         """
-        assert imported_pyqg, "pyqg must be installed to run this method"
+        assert IMPORTED_PYQG, "pyqg must be installed to run this method"
 
         # Initialize a pyqg model with this parameterization
         params = dict(kwargs)
@@ -401,9 +400,11 @@ class FeatureExtractor:
             return self.example_realspace_input * 0 + np.fft.irfftn(x, axes=(-2, -1))
 
     def is_real(self, arr: ArrayLike) -> bool:
+        """Check if a given array is in real space."""
         return len(set(arr.shape[-2:])) == 1
 
     def real(self, feature: StringOrNumeric) -> ArrayLike:
+        """Load and convert a feature to real space, if necessary."""
         arr = self[feature]
         if isinstance(arr, float):
             return arr
@@ -412,6 +413,7 @@ class FeatureExtractor:
         return self.ifft(arr)
 
     def compl(self, feature: StringOrNumeric) -> ArrayLike:
+        """Load and convert a feature to spectral space, if necessary."""
         arr = self[feature]
         if isinstance(arr, float):
             return arr
@@ -420,43 +422,55 @@ class FeatureExtractor:
         return arr
 
     # Spectral derivatrives
-    def ddxh(self, f: StringOrNumeric) -> ArrayLike:
-        return self.ik * self.compl(f)
+    def ddxh(self, field: StringOrNumeric) -> ArrayLike:
+        """Compute the horizontal derivative of ``field`` in spectral space."""
+        return self.ik * self.compl(field)
 
-    def ddyh(self, f: StringOrNumeric) -> ArrayLike:
-        return self.il * self.compl(f)
+    def ddyh(self, field: StringOrNumeric) -> ArrayLike:
+        """Compute the vertical derivative of ``field`` in spectral space."""
+        return self.il * self.compl(field)
 
-    def divh(self, x: StringOrNumeric, y: StringOrNumeric) -> ArrayLike:
-        return self.ddxh(x) + self.ddyh(y)
+    def divh(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> ArrayLike:
+        """Compute the divergence of a vector field in spectral space."""
+        return self.ddxh(field_x) + self.ddyh(field_y)
 
-    def curlh(self, x: StringOrNumeric, y: StringOrNumeric) -> ArrayLike:
-        return self.ddxh(y) - self.ddyh(x)
+    def curlh(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> ArrayLike:
+        """Compute the curl of a vector field in spectral space."""
+        return self.ddxh(field_y) - self.ddyh(field_x)
 
-    def laplacianh(self, x: StringOrNumeric) -> ArrayLike:
-        return self.wv2 * self.compl(x)
+    def laplacianh(self, field: StringOrNumeric) -> ArrayLike:
+        """Compute the Laplacian of a field in spectral space."""
+        return self.wv2 * self.compl(field)
 
-    def advectedh(self, x_: StringOrNumeric) -> ArrayLike:
-        x = self.real(x_)
-        return self.ddxh(x * self.m.ufull) + self.ddyh(x * self.m.vfull)
+    def advectedh(self, possibly_spectral_field: StringOrNumeric) -> ArrayLike:
+        """Advect a field in spectral space."""
+        field = self.real(possibly_spectral_field)
+        return self.ddxh(field * self.m.ufull) + self.ddyh(field * self.m.vfull)
 
     # Real counterparts
-    def ddx(self, f: StringOrNumeric) -> ArrayLike:
-        return self.real(self.ddxh(f))
+    def ddx(self, field: StringOrNumeric) -> ArrayLike:
+        """Compute the horizontal derivative of a field."""
+        return self.real(self.ddxh(field))
 
-    def ddy(self, f: StringOrNumeric) -> ArrayLike:
-        return self.real(self.ddyh(f))
+    def ddy(self, field: StringOrNumeric) -> ArrayLike:
+        """Compute the vertical derivative of a field."""
+        return self.real(self.ddyh(field))
 
-    def laplacian(self, x: StringOrNumeric) -> ArrayLike:
-        return self.real(self.laplacianh(x))
+    def laplacian(self, field: StringOrNumeric) -> ArrayLike:
+        """Compute the Laplacian of a field."""
+        return self.real(self.laplacianh(field))
 
-    def advected(self, x: StringOrNumeric) -> ArrayLike:
-        return self.real(self.advectedh(x))
+    def advected(self, field: StringOrNumeric) -> ArrayLike:
+        """Advect a field."""
+        return self.real(self.advectedh(field))
 
-    def curl(self, x: StringOrNumeric, y: StringOrNumeric) -> ArrayLike:
-        return self.real(self.curlh(x, y))
+    def curl(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> ArrayLike:
+        """Compute the curl of two fields."""
+        return self.real(self.curlh(field_x, field_y))
 
-    def div(self, x: StringOrNumeric, y: StringOrNumeric) -> ArrayLike:
-        return self.real(self.divh(x, y))
+    def div(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> ArrayLike:
+        """Compute the divergence of two fields."""
+        return self.real(self.divh(field_x, field_y))
 
     # Main function: interpreting a string as a feature
     def extract_feature(self, feature: str) -> Numeric:
@@ -485,7 +499,7 @@ class FeatureExtractor:
             binary_operator
                 "mul" | "add" | "sub" | "pow" | "div" | "curl"
             number
-                [\-\d\.]+
+                ^\-?\d+\.?\d*$
             variable_name
                 .*
 
@@ -520,18 +534,19 @@ class FeatureExtractor:
             feature.
         """
         # Helper to recurse on each side of an arity-2 expression
-        def extract_pair(s):
+        def extract_pair(string):
             depth = 0
-            for i, char in enumerate(s):
+            for i, char in enumerate(string):
                 if char == "(":
                     depth += 1
                 elif char == ")":
                     depth -= 1
                 elif char == "," and depth == 0:
-                    return self.extract_feature(s[:i].strip()), self.extract_feature(
-                        s[i + 1 :].strip()
+                    return (
+                        self.extract_feature(string[:i].strip()),
+                        self.extract_feature(string[i+1:].strip())
                     )
-            raise ValueError(f"string {s} is not a comma-separated pair")
+            raise ValueError(f"string {string} is not a comma-separated pair")
 
         real_or_spectral = lambda arr: arr + [a + "h" for a in arr]
 
@@ -554,7 +569,7 @@ class FeatureExtractor:
                     self.cache[feature] = getattr(self, op)(self.extract_feature(inner))
                 else:
                     raise ValueError(f"could not interpret {feature}")
-            elif re.search(f"^[\-\d\.]+$", feature):
+            elif re.search(f"^\-?\d+\.?\d*$", feature):
                 # ensure numbers still work
                 return float(feature)
             elif feature == "streamfunction":
@@ -575,8 +590,7 @@ class FeatureExtractor:
                 return self.cache[attribute]
             elif re.search(r"^[\-\d\.]+$", attribute):
                 return float(attribute)
-            else:
-                return getattr(self.m, attribute)
+            return getattr(self.m, attribute)
         elif any(
             [
                 isinstance(attribute, kls)
@@ -584,8 +598,7 @@ class FeatureExtractor:
             ]
         ):
             return attribute
-        else:
-            raise KeyError(attribute)
+        raise KeyError(attribute)
 
 
 def energy_budget_term(model, term):
