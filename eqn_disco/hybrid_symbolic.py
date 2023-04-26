@@ -8,7 +8,13 @@ import xarray as xr
 from scipy.stats import pearsonr
 from sklearn.linear_model import LinearRegression
 
-from .utils import FeatureExtractor, Parameterization, ArrayLike, ModelLike, ensure_numpy
+from .utils import (
+    FeatureExtractor,
+    Parameterization,
+    ArrayLike,
+    ModelLike,
+    ensure_numpy,
+)
 
 
 def make_custom_gplearn_functions(data_set: xr.Dataset, spatial_funcs: List[str]):
@@ -44,7 +50,7 @@ def make_custom_gplearn_functions(data_set: xr.Dataset, spatial_funcs: List[str]
         Function(
             function=lambda x, name=function_name: apply_spatial(name, x),
             name=function_name,
-            arity=1
+            arity=1,
         )
         for function_name in spatial_funcs
     ]
@@ -91,7 +97,9 @@ def run_gplearn_iteration(
     spatial_functions = make_custom_gplearn_functions(data_set, spatial_functions)
 
     # Flatten the input and target data
-    inputs = np.array([data_set[feature].data.reshape(-1) for feature in base_features]).T
+    inputs = np.array(
+        [data_set[feature].data.reshape(-1) for feature in base_features]
+    ).T
     targets = target.reshape(-1)
 
     gplearn_kwargs = {
@@ -237,8 +245,7 @@ class LinearSymbolicRegression(Parameterization):
 
         models = [
             LinearRegression(fit_intercept=False).fit(
-                extract(inputs, flat=True),
-                extract(target, flat=True)
+                extract(inputs, flat=True), extract(target, flat=True)
             )
             for extract in extractors
         ]
@@ -246,9 +253,7 @@ class LinearSymbolicRegression(Parameterization):
         return cls(models, inputs, target)
 
 
-def each_layer(
-    data_set: xr.Dataset
-) -> List[xr.Dataset]:
+def each_layer(data_set: xr.Dataset) -> List[xr.Dataset]:
     """Return a list of datasets, either for each vertical layer in `data_set`
     if it has a vertical dimension `lev`, or just `[data_set]` otherwise.
 
@@ -263,7 +268,7 @@ def each_layer(
         List of datasets for each vertical layer, if present
 
     """
-    if 'lev' in data_set:
+    if "lev" in data_set:
         return [data_set.isel(lev=z) for z in range(len(data_set.lev))]
 
     return [data_set]
@@ -289,6 +294,7 @@ def corr(spatial_data_a: xr.DataArray, spatial_data_b: xr.DataArray) -> float:
         np.array(spatial_data_a.data).ravel(),
         np.array(spatial_data_b.data).ravel(),
     )[0]
+
 
 def hybrid_symbolic_regression(  # pylint: disable=too-many-locals
     data_set: xr.Dataset,
@@ -332,11 +338,15 @@ def hybrid_symbolic_regression(  # pylint: disable=too-many-locals
 
     try:
         for i in range(max_iters):
-            for data_set_layer, residual_layer in zip(each_layer(data_set), each_layer(residual)):
+            for data_set_layer, residual_layer in zip(
+                each_layer(data_set), each_layer(residual)
+            ):
                 symbolic_regressor = run_gplearn_iteration(
                     data_set_layer, target=residual_layer, **kw
                 )
-                new_term = str(symbolic_regressor._program)  # pylint: disable=protected-access
+                new_term = str(
+                    symbolic_regressor._program  # pylint: disable=protected-access
+                )
                 new_vals = extract(new_term)
                 # Prevent spurious duplicates, e.g. ddx(q) and ddx(add(1,q))
                 if not any(corr(new_vals, v) > 0.99 for v in vals):

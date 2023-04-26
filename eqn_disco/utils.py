@@ -2,8 +2,10 @@
 import operator
 from typing import List, Dict, Union, Any, Tuple, Optional
 import re
+
 try:
     import pyqg
+
     IMPORTED_PYQG = True
 except ImportError:
     IMPORTED_PYQG = False
@@ -124,7 +126,7 @@ class Parameterization(ParameterizationSuperclass):
 
         """
 
-        def ensure_array(array : ArrayLike) -> np.ndarray:
+        def ensure_array(array: ArrayLike) -> np.ndarray:
             """Convert an array-like object to a numpy array with a
             model-compatible dtype."""
             return ensure_numpy(array).astype(model.q.dtype)
@@ -163,7 +165,12 @@ class Parameterization(ParameterizationSuperclass):
         # Otherwise, this is a "simple" velocity parameterization; return a tuple
         return tuple(ensure_array(preds[k]) for k in keys)
 
-    def run_online(self, sampling_freq: int = 1000, nx : int = 64, **kwargs) -> xr.Dataset: # pylint: disable=invalid-name
+    def run_online(
+        self,
+        sampling_freq: int = 1000,
+        nx: int = 64,  # pylint: disable=invalid-name
+        **kwargs,
+    ) -> xr.Dataset:
         """Initialize and run a parameterized pyqg.QGModel.
 
         Saves snapshots periodically.
@@ -197,7 +204,7 @@ class Parameterization(ParameterizationSuperclass):
         while model.t < model.tmax:
             if model.tc % sampling_freq == 0:
                 snapshots.append(model.to_dataset().copy(deep=True))
-            model._step_forward() # pylint: disable=protected-access
+            model._step_forward()  # pylint: disable=protected-access
 
         data_set = xr.concat(snapshots, dim="time")
 
@@ -238,7 +245,7 @@ class Parameterization(ParameterizationSuperclass):
             test[f"{key}_predictions"] = truth * 0 + val
             preds = test[f"{key}_predictions"]
             error = (truth - preds) ** 2
-            true_var = (truth - truth.mean())**2
+            true_var = (truth - truth.mean()) ** 2
 
             def dims_except(*dims, key=key):
                 return [d for d in test[key].dims if d not in dims]
@@ -307,39 +314,55 @@ class FeatureExtractor:
                 res = res.reshape(-1)
 
         else:
-            res = np.array([ensure_numpy(self.extract_feature(f)) for f in feature_or_features])
+            res = np.array(
+                [ensure_numpy(self.extract_feature(f)) for f in feature_or_features]
+            )
             if flat:
                 res = res.reshape(len(feature_or_features), -1).T
         return res
 
-    def __init__(self, model_or_dataset: ModelLike, example_realspace_input: Optional[str] = None):
+    def __init__(
+        self, model_or_dataset: ModelLike, example_realspace_input: Optional[str] = None
+    ):
         """Build ``FeatureExtractor``."""
         self.model = model_or_dataset
         self.cache = {}
 
-        assert hasattr(self.model, "x"), "dataset must have horizontal realspace dimension"
-        assert hasattr(self.model, "k"), "dataset must have horizontal spectral dimension"
-        assert hasattr(self.model, "y"), "dataset must have vertical realspace dimension"
+        assert hasattr(
+            self.model, "x"
+        ), "dataset must have horizontal realspace dimension"
+        assert hasattr(
+            self.model, "k"
+        ), "dataset must have horizontal spectral dimension"
+        assert hasattr(
+            self.model, "y"
+        ), "dataset must have vertical realspace dimension"
         assert hasattr(self.model, "l"), "dataset must have vertical spectral dimension"
 
         if example_realspace_input is None:
             if hasattr(self.model, "q"):
                 example_realspace_input = "q"
             elif isinstance(self.model, xr.Dataset):
-                example_realspace_input = next(key for key, val in self.model.items() if 'x' in val.dims)
+                example_realspace_input = next(
+                    key for key, val in self.model.items() if "x" in val.dims
+                )
         self.example_realspace_input = getattr(self.model, example_realspace_input)
 
         if hasattr(self.model, "_ik"):
-            self.ik, self.il = np.meshgrid(self.model._ik, self.model._il) # pylint: disable=invalid-name
+            self.ik, self.il = np.meshgrid(  # pylint: disable=invalid-name
+                self.model._ik, self.model._il
+            )
         elif hasattr(self.model, "fft"):
             self.ik = 1j * self.model.k  # pylint: disable=invalid-name
             self.il = 1j * self.model.l  # pylint: disable=invalid-name
         else:
-            k, l = np.meshgrid(self.model.k, self.model.l) # pylint: disable=invalid-name
+            k, l = np.meshgrid(  # pylint: disable=invalid-name
+                self.model.k, self.model.l
+            )
             self.ik = 1j * k  # pylint: disable=invalid-name
             self.il = 1j * l  # pylint: disable=invalid-name
 
-        self.nx = self.ik.shape[0] # pylint: disable=invalid-name
+        self.nx = self.ik.shape[0]  # pylint: disable=invalid-name
         self.wv2 = self.ik**2 + self.il**2
 
     # Helpers for taking FFTs / deciding if we need to
@@ -365,7 +388,9 @@ class FeatureExtractor:
             # use numpy FFTs and return a data array instead.
             dims = self.spectral_dims
             return xr.DataArray(
-                np.fft.rfftn(real_array, axes=(-2, -1)), dims=dims, coords={d: self[d] for d in dims}
+                np.fft.rfftn(real_array, axes=(-2, -1)),
+                dims=dims,
+                coords={d: self[d] for d in dims},
             )
 
     @property
@@ -450,8 +475,12 @@ class FeatureExtractor:
 
     def advectedh(self, possibly_spectral_field: StringOrNumeric) -> ArrayLike:
         """Advect a field in spectral space."""
-        assert hasattr(self.model, "ufull"), "Model must have `ufull` and `vfull` to advect"
-        assert hasattr(self.model, "vfull"), "Model must have `ufull` and `vfull` to advect"
+        assert hasattr(
+            self.model, "ufull"
+        ), "Model must have `ufull` and `vfull` to advect"
+        assert hasattr(
+            self.model, "vfull"
+        ), "Model must have `ufull` and `vfull` to advect"
         field = self._real(possibly_spectral_field)
         return self.ddxh(field * self.model.ufull) + self.ddyh(field * self.model.vfull)
 
@@ -526,8 +555,10 @@ class FeatureExtractor:
             - ``add``, which adds two expressions
             - ``sub``, which subtracts the second expression from the first
             - ``pow``, which takes the first expression to the power of the second
-            - ``div``, which takes the divergence of the vector field whose x and y components are given by the two expressions, respectively
-            - ``curl``, which takes the curl of the vector field whose x and y components are given by the two expressions, respectively
+            - ``div``, which takes the divergence of the vector field whose x
+                and y components are given by the two expressions, respectively
+            - ``curl``, which takes the curl of the vector field whose x and y
+                components are given by the two expressions, respectively
 
         Parameters
         ----------
@@ -542,7 +573,7 @@ class FeatureExtractor:
             feature.
         """
 
-        def extract_pair(string : str) -> Tuple[Numeric, Numeric]:
+        def extract_pair(string: str) -> Tuple[Numeric, Numeric]:
             """Helper to extract two features from a comma-separated pair."""
             depth = 0
             for i, char in enumerate(string):
@@ -553,11 +584,11 @@ class FeatureExtractor:
                 elif char == "," and depth == 0:
                     return (
                         self.extract_feature(string[:i].strip()),
-                        self.extract_feature(string[i+1:].strip())
+                        self.extract_feature(string[i + 1 :].strip()),
                     )
             raise ValueError(f"string {string} is not a comma-separated pair")
 
-        def real_or_spectral(arr : List[str]) -> List[str]:
+        def real_or_spectral(arr: List[str]) -> List[str]:
             """Helper to convert a list of strings to a list of real/spectral
             versions of those strings."""
             return arr + [a + "h" for a in arr]
@@ -570,15 +601,21 @@ class FeatureExtractor:
             if match:
                 op_name, inner = match.group(1), match.group(2)
                 if op_name in ["mul", "add", "sub", "pow"]:
-                    self.cache[feature] = getattr(operator, op_name)(*extract_pair(inner))
+                    self.cache[feature] = getattr(operator, op_name)(
+                        *extract_pair(inner)
+                    )
                 elif op_name in ["neg", "abs"]:
                     self.cache[feature] = getattr(operator, op_name)(
                         self.extract_feature(inner)
                     )
                 elif op_name in real_or_spectral(["div", "curl"]):
                     self.cache[feature] = getattr(self, op_name)(*extract_pair(inner))
-                elif op_name in real_or_spectral(["ddx", "ddy", "advected", "laplacian"]):
-                    self.cache[feature] = getattr(self, op_name)(self.extract_feature(inner))
+                elif op_name in real_or_spectral(
+                    ["ddx", "ddy", "advected", "laplacian"]
+                ):
+                    self.cache[feature] = getattr(self, op_name)(
+                        self.extract_feature(inner)
+                    )
                 else:
                     raise ValueError(f"could not interpret {feature}")
             elif feature == "streamfunction":
@@ -605,8 +642,7 @@ class FeatureExtractor:
                 return float(attribute)
             return getattr(self.model, attribute)
         if any(
-            isinstance(attribute, kls)
-            for kls in [xr.DataArray, np.ndarray, int, float]
+            isinstance(attribute, kls) for kls in [xr.DataArray, np.ndarray, int, float]
         ):
             return attribute
         raise KeyError(attribute)
