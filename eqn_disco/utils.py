@@ -123,7 +123,12 @@ class Parameterization(ParameterizationSuperclass):
            type as the model's PV variable.
 
         """
-        ensure_array = lambda x: ensure_numpy(x).astype(model.q.dtype)
+
+        def ensure_array(array : ArrayLike) -> np.ndarray:
+            """Convert an array-like object to a numpy array with a
+            model-compatible dtype."""
+            return ensure_numpy(array).astype(model.q.dtype)
+
         preds = self.predict(model)
         keys = list(sorted(preds.keys()))  # these are the same as our targets
         assert keys == self.targets
@@ -134,14 +139,14 @@ class Parameterization(ParameterizationSuperclass):
             # if there's only one target, it's a PV parameterization, and we can
             # just return the array
             return ensure_array(preds[keys[0]])
-        elif keys == ["uq_subgrid_flux", "vq_subgrid_flux"]:
+        if keys == ["uq_subgrid_flux", "vq_subgrid_flux"]:
             # these are PV subgrid fluxes; we need to take their divergence
             extractor = FeatureExtractor(model)
             return ensure_array(
                 extractor.ddx(preds["uq_subgrid_flux"])
                 + extractor.ddy(preds["vq_subgrid_flux"])
             )
-        elif "uu_subgrid_flux" in keys and len(keys) == 3:
+        if "uu_subgrid_flux" in keys and len(keys) == 3:
             # these are velocity subgrid fluxes; we need to take two sets of
             # divergences and return a tuple
             extractor = FeatureExtractor(model)
@@ -155,11 +160,10 @@ class Parameterization(ParameterizationSuperclass):
                     + extractor.ddy(preds["vv_subgrid_flux"])
                 ),
             )
-        else:
-            # this is a "simple" velocity parameterization; return a tuple
-            return tuple(ensure_array(preds[k]) for k in keys)
+        # Otherwise, this is a "simple" velocity parameterization; return a tuple
+        return tuple(ensure_array(preds[k]) for k in keys)
 
-    def run_online(self, sampling_freq: int = 1000, nx : int = 64, **kwargs) -> xr.Dataset:
+    def run_online(self, sampling_freq: int = 1000, nx : int = 64, **kwargs) -> xr.Dataset: # pylint: disable=invalid-name
         """Initialize and run a parameterized pyqg.QGModel.
 
         Saves snapshots periodically.
@@ -190,19 +194,19 @@ class Parameterization(ParameterizationSuperclass):
 
         # Run it, saving snapshots
         snapshots = []
-        while model.t < m.tmax:
+        while model.t < model.tmax:
             if model.tc % sampling_freq == 0:
                 snapshots.append(model.to_dataset().copy(deep=True))
-            model._step_forward()
+            model._step_forward() # pylint: disable=protected-access
 
         data_set = xr.concat(snapshots, dim="time")
 
         # Diagnostics get dropped by this procedure since they're only present for
         # part of the timeseries; resolve this by saving the most recent
         # diagnostics (they're already time-averaged so this is ok)
-        for k, v in snapshots[-1].variables.items():
-            if k not in data_set:
-                data_set[k] = v.isel(time=-1)
+        for key, value in snapshots[-1].variables.items():
+            if key not in data_set:
+                data_set[key] = value.isel(time=-1)
 
         # Drop complex variables since they're redundant and can't be saved
         complex_vars = [k for k, v in data_set.variables.items() if np.iscomplexobj(v)]
@@ -234,12 +238,9 @@ class Parameterization(ParameterizationSuperclass):
             test[f"{key}_predictions"] = truth * 0 + val
             preds = test[f"{key}_predictions"]
             error = (truth - preds) ** 2
+            true_var = (truth - truth.mean())**2
 
-            true_centered = truth - truth.mean()
-            pred_centered = preds - preds.mean()
-            true_var = true_centered**2
-
-            def dims_except(*dims):
+            def dims_except(*dims, key=key):
                 return [d for d in test[key].dims if d not in dims]
 
             time = dims_except("x", "y", "lev")
@@ -313,36 +314,36 @@ class FeatureExtractor:
 
     def __init__(self, model_or_dataset: ModelLike, example_realspace_input: Optional[str] = None):
         """Build ``FeatureExtractor``."""
-        self.m = model_or_dataset
+        self.model = model_or_dataset
         self.cache = {}
 
-        assert hasattr(self.m, "x"), "dataset must have horizontal realspace dimension"
-        assert hasattr(self.m, "k"), "dataset must have horizontal spectral dimension"
-        assert hasattr(self.m, "y"), "dataset must have vertical realspace dimension"
-        assert hasattr(self.m, "l"), "dataset must have vertical spectral dimension"
+        assert hasattr(self.model, "x"), "dataset must have horizontal realspace dimension"
+        assert hasattr(self.model, "k"), "dataset must have horizontal spectral dimension"
+        assert hasattr(self.model, "y"), "dataset must have vertical realspace dimension"
+        assert hasattr(self.model, "l"), "dataset must have vertical spectral dimension"
 
         if example_realspace_input is None:
-            if hasattr(self.m, "q"):
+            if hasattr(self.model, "q"):
                 example_realspace_input = "q"
-            elif isinstance(self.m, xr.Dataset):
-                example_realspace_input = next(key for key, val in self.m.items() if 'x' in val.dims)
-        self.example_realspace_input = getattr(self.m, example_realspace_input)
+            elif isinstance(self.model, xr.Dataset):
+                example_realspace_input = next(key for key, val in self.model.items() if 'x' in val.dims)
+        self.example_realspace_input = getattr(self.model, example_realspace_input)
 
-        if hasattr(self.m, "_ik"):
-            self.ik, self.il = np.meshgrid(self.m._ik, self.m._il)
-        elif hasattr(self.m, "fft"):
-            self.ik = 1j * self.m.k
-            self.il = 1j * self.m.l
+        if hasattr(self.model, "_ik"):
+            self.ik, self.il = np.meshgrid(self.model._ik, self.model._il) # pylint: disable=invalid-name
+        elif hasattr(self.model, "fft"):
+            self.ik = 1j * self.model.k  # pylint: disable=invalid-name
+            self.il = 1j * self.model.l  # pylint: disable=invalid-name
         else:
-            k, l = np.meshgrid(self.m.k, self.m.l)
-            self.ik = 1j * k
-            self.il = 1j * l
+            k, l = np.meshgrid(self.model.k, self.model.l) # pylint: disable=invalid-name
+            self.ik = 1j * k  # pylint: disable=invalid-name
+            self.il = 1j * l  # pylint: disable=invalid-name
 
-        self.nx = self.ik.shape[0]
+        self.nx = self.ik.shape[0] # pylint: disable=invalid-name
         self.wv2 = self.ik**2 + self.il**2
 
     # Helpers for taking FFTs / deciding if we need to
-    def fft(self, x: ArrayLike) -> ArrayLike:
+    def fft(self, real_array: ArrayLike) -> ArrayLike:
         """Compute the FFT of ``x``.
 
         Parameters
@@ -358,29 +359,31 @@ class FeatureExtractor:
         """
         try:
             # pyqg.Models will respond to `fft` (which might be pyFFTW, which is fast)
-            return self.m.fft(x)
+            return self.model.fft(real_array)
         except AttributeError:
             # if we got an attribute error, that means we have an xarray.Dataset.
             # use numpy FFTs and return a data array instead.
             dims = self.spectral_dims
-            coords = dict([(d, self[d]) for d in dims])
             return xr.DataArray(
-                np.fft.rfftn(x, axes=(-2, -1)), dims=dims, coords=coords
+                np.fft.rfftn(real_array, axes=(-2, -1)), dims=dims, coords={d: self[d] for d in dims}
             )
 
     @property
     def spatial_shape(self) -> Tuple[int, ...]:
+        """Spatial shape of variables in real space."""
         return self.example_realspace_input.shape
 
     @property
     def spatial_dims(self) -> Tuple[str, ...]:
+        """Names of spatial dimensions in real space."""
         return self.example_realspace_input.dims
 
     @property
     def spectral_dims(self) -> Tuple[str, ...]:
+        """Names of spatial dimensions in spectral space."""
         return [dict(y="l", x="k").get(d, d) for d in self.spatial_dims]
 
-    def ifft(self, x: ArrayLike) -> ArrayLike:
+    def ifft(self, spectral_array: ArrayLike) -> ArrayLike:
         """Compute the inverse FFT of ``x``.
 
         Parameters
@@ -395,40 +398,43 @@ class FeatureExtractor:
 
         """
         try:
-            return self.m.ifft(x)
+            return self.model.ifft(spectral_array)
         except AttributeError:
-            return self.example_realspace_input * 0 + np.fft.irfftn(x, axes=(-2, -1))
+            # Convert numpy to xarray by adding 0 with the right dimensions
+            realspace_array = np.fft.irfftn(spectral_array, axes=(-2, -1))
+            zero_as_data_array = self.example_realspace_input * 0
+            return zero_as_data_array + realspace_array
 
-    def is_real(self, arr: ArrayLike) -> bool:
+    def _is_real(self, arr: ArrayLike) -> bool:
         """Check if a given array is in real space."""
         return len(set(arr.shape[-2:])) == 1
 
-    def real(self, feature: StringOrNumeric) -> ArrayLike:
+    def _real(self, feature: StringOrNumeric) -> ArrayLike:
         """Load and convert a feature to real space, if necessary."""
         arr = self[feature]
         if isinstance(arr, float):
             return arr
-        if self.is_real(arr):
+        if self._is_real(arr):
             return arr
         return self.ifft(arr)
 
-    def compl(self, feature: StringOrNumeric) -> ArrayLike:
+    def _compl(self, feature: StringOrNumeric) -> ArrayLike:
         """Load and convert a feature to spectral space, if necessary."""
         arr = self[feature]
         if isinstance(arr, float):
             return arr
-        if self.is_real(arr):
+        if self._is_real(arr):
             return self.fft(arr)
         return arr
 
     # Spectral derivatrives
     def ddxh(self, field: StringOrNumeric) -> ArrayLike:
         """Compute the horizontal derivative of ``field`` in spectral space."""
-        return self.ik * self.compl(field)
+        return self.ik * self._compl(field)
 
     def ddyh(self, field: StringOrNumeric) -> ArrayLike:
         """Compute the vertical derivative of ``field`` in spectral space."""
-        return self.il * self.compl(field)
+        return self.il * self._compl(field)
 
     def divh(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> ArrayLike:
         """Compute the divergence of a vector field in spectral space."""
@@ -440,37 +446,39 @@ class FeatureExtractor:
 
     def laplacianh(self, field: StringOrNumeric) -> ArrayLike:
         """Compute the Laplacian of a field in spectral space."""
-        return self.wv2 * self.compl(field)
+        return self.wv2 * self._compl(field)
 
     def advectedh(self, possibly_spectral_field: StringOrNumeric) -> ArrayLike:
         """Advect a field in spectral space."""
-        field = self.real(possibly_spectral_field)
-        return self.ddxh(field * self.m.ufull) + self.ddyh(field * self.m.vfull)
+        assert hasattr(self.model, "ufull"), "Model must have `ufull` and `vfull` to advect"
+        assert hasattr(self.model, "vfull"), "Model must have `ufull` and `vfull` to advect"
+        field = self._real(possibly_spectral_field)
+        return self.ddxh(field * self.model.ufull) + self.ddyh(field * self.model.vfull)
 
     # Real counterparts
     def ddx(self, field: StringOrNumeric) -> ArrayLike:
         """Compute the horizontal derivative of a field."""
-        return self.real(self.ddxh(field))
+        return self._real(self.ddxh(field))
 
     def ddy(self, field: StringOrNumeric) -> ArrayLike:
         """Compute the vertical derivative of a field."""
-        return self.real(self.ddyh(field))
+        return self._real(self.ddyh(field))
 
     def laplacian(self, field: StringOrNumeric) -> ArrayLike:
         """Compute the Laplacian of a field."""
-        return self.real(self.laplacianh(field))
+        return self._real(self.laplacianh(field))
 
     def advected(self, field: StringOrNumeric) -> ArrayLike:
         """Advect a field."""
-        return self.real(self.advectedh(field))
+        return self._real(self.advectedh(field))
 
     def curl(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> ArrayLike:
         """Compute the curl of two fields."""
-        return self.real(self.curlh(field_x, field_y))
+        return self._real(self.curlh(field_x, field_y))
 
     def div(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> ArrayLike:
         """Compute the divergence of two fields."""
-        return self.real(self.divh(field_x, field_y))
+        return self._real(self.divh(field_x, field_y))
 
     # Main function: interpreting a string as a feature
     def extract_feature(self, feature: str) -> Numeric:
@@ -499,7 +507,7 @@ class FeatureExtractor:
             binary_operator
                 "mul" | "add" | "sub" | "pow" | "div" | "curl"
             number
-                ^\-?\d+\.?\d*$
+                "-"? [0-9]+ "."? [0-9]*
             variable_name
                 .*
 
@@ -533,8 +541,9 @@ class FeatureExtractor:
             Numeric or array-like expression representing the value of the
             feature.
         """
-        # Helper to recurse on each side of an arity-2 expression
-        def extract_pair(string):
+
+        def extract_pair(string : str) -> Tuple[Numeric, Numeric]:
+            """Helper to extract two features from a comma-separated pair."""
             depth = 0
             for i, char in enumerate(string):
                 if char == "(":
@@ -548,60 +557,64 @@ class FeatureExtractor:
                     )
             raise ValueError(f"string {string} is not a comma-separated pair")
 
-        real_or_spectral = lambda arr: arr + [a + "h" for a in arr]
+        def real_or_spectral(arr : List[str]) -> List[str]:
+            """Helper to convert a list of strings to a list of real/spectral
+            versions of those strings."""
+            return arr + [a + "h" for a in arr]
 
-        if not self.extracted(feature):
+        if not self._extracted(feature):
             # Check if the feature looks like "function(expr1, expr2)"
             # (better would be to write a grammar + use a parser,
             # but this is a very simple DSL)
             match = re.search(r"^([a-z]+)\((.*)\)$", feature)
             if match:
-                op, inner = match.group(1), match.group(2)
-                if op in ["mul", "add", "sub", "pow"]:
-                    self.cache[feature] = getattr(operator, op)(*extract_pair(inner))
-                elif op in ["neg", "abs"]:
-                    self.cache[feature] = getattr(operator, op)(
+                op_name, inner = match.group(1), match.group(2)
+                if op_name in ["mul", "add", "sub", "pow"]:
+                    self.cache[feature] = getattr(operator, op_name)(*extract_pair(inner))
+                elif op_name in ["neg", "abs"]:
+                    self.cache[feature] = getattr(operator, op_name)(
                         self.extract_feature(inner)
                     )
-                elif op in real_or_spectral(["div", "curl"]):
-                    self.cache[feature] = getattr(self, op)(*extract_pair(inner))
-                elif op in real_or_spectral(["ddx", "ddy", "advected", "laplacian"]):
-                    self.cache[feature] = getattr(self, op)(self.extract_feature(inner))
+                elif op_name in real_or_spectral(["div", "curl"]):
+                    self.cache[feature] = getattr(self, op_name)(*extract_pair(inner))
+                elif op_name in real_or_spectral(["ddx", "ddy", "advected", "laplacian"]):
+                    self.cache[feature] = getattr(self, op_name)(self.extract_feature(inner))
                 else:
                     raise ValueError(f"could not interpret {feature}")
-            elif re.search(f"^\-?\d+\.?\d*$", feature):
-                # ensure numbers still work
-                return float(feature)
             elif feature == "streamfunction":
                 # hack to make streamfunctions work in both datasets & pyqg.Models
                 self.cache[feature] = self.ifft(self["ph"])
+            elif re.search(r"^\-?\d+\.?\d*$", feature):
+                # ensure numbers still work
+                return float(feature)
             else:
                 raise ValueError(f"could not interpret {feature}")
 
         return self[feature]
 
-    def extracted(self, key: str) -> bool:
-        return key in self.cache or hasattr(self.m, key)
+    def _extracted(self, key: str) -> bool:
+        """Check if a feature has already been extracted."""
+        return key in self.cache or hasattr(self.model, key)
 
     # A bit of additional hackery to allow for the reading of features or properties
     def __getitem__(self, attribute: StringOrNumeric) -> Any:
         if isinstance(attribute, str):
             if attribute in self.cache:
                 return self.cache[attribute]
-            elif re.search(r"^[\-\d\.]+$", attribute):
+            if re.search(r"^[\-\d\.]+$", attribute):
                 return float(attribute)
-            return getattr(self.m, attribute)
-        elif any(
-            [
-                isinstance(attribute, kls)
-                for kls in [xr.DataArray, np.ndarray, int, float]
-            ]
+            return getattr(self.model, attribute)
+        if any(
+            isinstance(attribute, kls)
+            for kls in [xr.DataArray, np.ndarray, int, float]
         ):
             return attribute
         raise KeyError(attribute)
 
 
 def energy_budget_term(model, term):
+    """Compute a term in the energy budget, handling contributions from the
+    parameterization if present"""
     val = model[term]
     if "paramspec_" + term in model:
         val += model["paramspec_" + term]
@@ -609,6 +622,7 @@ def energy_budget_term(model, term):
 
 
 def energy_budget_figure(models, skip=0):
+    """Plot the energy budget for a set of models"""
     fig = plt.figure(figsize=(12, 5))
     vmax = 0
     for i, term in enumerate(["KEflux", "APEflux", "APEgenspec", "KEfrictionspec"]):
