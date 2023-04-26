@@ -21,8 +21,7 @@ ParameterizationSuperclass = pyqg.Parameterization if IMPORTED_PYQG else object
 
 
 def ensure_numpy(array: ArrayLike) -> np.ndarray:
-    """Helper to ensure that a given array-like input (numpy ndarray or xarray
-    DataArray) is converted to numpy format.
+    """Ensure a given array-like input is converted to numpy.
 
     Parameters
     ----------
@@ -126,9 +125,8 @@ class Parameterization(ParameterizationSuperclass):
 
         """
 
-        def ensure_array(array: ArrayLike) -> np.ndarray:
-            """Convert an array-like object to a numpy array with a
-            model-compatible dtype."""
+        def _ensure_array(array: ArrayLike) -> np.ndarray:
+            """Convert an array-like to numpy with model-compatible dtype."""
             return ensure_numpy(array).astype(model.q.dtype)
 
         preds = self.predict(model)
@@ -140,11 +138,11 @@ class Parameterization(ParameterizationSuperclass):
         if len(keys) == 1:
             # if there's only one target, it's a PV parameterization, and we can
             # just return the array
-            return ensure_array(preds[keys[0]])
+            return _ensure_array(preds[keys[0]])
         if keys == ["uq_subgrid_flux", "vq_subgrid_flux"]:
             # these are PV subgrid fluxes; we need to take their divergence
             extractor = FeatureExtractor(model)
-            return ensure_array(
+            return _ensure_array(
                 extractor.ddx(preds["uq_subgrid_flux"])
                 + extractor.ddy(preds["vq_subgrid_flux"])
             )
@@ -153,17 +151,17 @@ class Parameterization(ParameterizationSuperclass):
             # divergences and return a tuple
             extractor = FeatureExtractor(model)
             return (
-                ensure_array(
+                _ensure_array(
                     extractor.ddx(preds["uu_subgrid_flux"])
                     + extractor.ddy(preds["uv_subgrid_flux"])
                 ),
-                ensure_array(
+                _ensure_array(
                     extractor.ddx(preds["uv_subgrid_flux"])
                     + extractor.ddy(preds["vv_subgrid_flux"])
                 ),
             )
         # Otherwise, this is a "simple" velocity parameterization; return a tuple
-        return tuple(ensure_array(preds[k]) for k in keys)
+        return tuple(_ensure_array(preds[k]) for k in keys)
 
     def run_online(
         self,
@@ -574,7 +572,7 @@ class FeatureExtractor:
         """
 
         def extract_pair(string: str) -> Tuple[Numeric, Numeric]:
-            """Helper to extract two features from a comma-separated pair."""
+            """Extract two features from a comma-separated pair."""
             depth = 0
             for i, char in enumerate(string):
                 if char == "(":
@@ -589,8 +587,7 @@ class FeatureExtractor:
             raise ValueError(f"string {string} is not a comma-separated pair")
 
         def real_or_spectral(arr: List[str]) -> List[str]:
-            """Helper to convert a list of strings to a list of real/spectral
-            versions of those strings."""
+            """Convert a list of strings to a list of real/spectral versions."""
             return arr + [a + "h" for a in arr]
 
         if not self._extracted(feature):
@@ -635,6 +632,7 @@ class FeatureExtractor:
 
     # A bit of additional hackery to allow for the reading of features or properties
     def __getitem__(self, attribute: StringOrNumeric) -> Any:
+        """Read an attribute from the model or cache, or echo back if numeric."""
         if isinstance(attribute, str):
             if attribute in self.cache:
                 return self.cache[attribute]
@@ -649,8 +647,7 @@ class FeatureExtractor:
 
 
 def energy_budget_term(model, term):
-    """Compute a term in the energy budget, handling contributions from the
-    parameterization if present"""
+    """Compute an energy budget term, handling parameterization contributions if present."""
     val = model[term]
     if "paramspec_" + term in model:
         val += model["paramspec_" + term]
@@ -658,7 +655,7 @@ def energy_budget_term(model, term):
 
 
 def energy_budget_figure(models, skip=0):
-    """Plot the energy budget for a set of models"""
+    """Plot the energy budget for a set of models."""
     fig = plt.figure(figsize=(12, 5))
     vmax = 0
     for i, term in enumerate(["KEflux", "APEflux", "APEgenspec", "KEfrictionspec"]):

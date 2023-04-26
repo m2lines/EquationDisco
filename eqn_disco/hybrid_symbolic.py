@@ -241,7 +241,7 @@ class LinearSymbolicRegression(Parameterization):
             Resulting linear regression parameterization.
 
         """
-        extractors = [FeatureExtractor(layer) for layer in each_layer(data_set)]
+        extractors = [FeatureExtractor(layer) for layer in _each_layer(data_set)]
 
         models = [
             LinearRegression(fit_intercept=False).fit(
@@ -253,21 +253,8 @@ class LinearSymbolicRegression(Parameterization):
         return cls(models, inputs, target)
 
 
-def each_layer(data_set: xr.Dataset) -> List[xr.Dataset]:
-    """Return a list of datasets, either for each vertical layer in `data_set`
-    if it has a vertical dimension `lev`, or just `[data_set]` otherwise.
-
-    Parameters
-    ----------
-    data_set : xarray.Dataset
-        Dataset with or without a vertical dimension `lev`
-
-    Returns
-    -------
-    List[xarray.Dataset]
-        List of datasets for each vertical layer, if present
-
-    """
+def _each_layer(data_set: xr.Dataset) -> List[xr.Dataset]:
+    """Return a list of datasets for each vertical layer in `data_set`."""
     if "lev" in data_set:
         return [data_set.isel(lev=z) for z in range(len(data_set.lev))]
 
@@ -339,7 +326,7 @@ def hybrid_symbolic_regression(  # pylint: disable=too-many-locals
     try:
         for i in range(max_iters):
             for data_set_layer, residual_layer in zip(
-                each_layer(data_set), each_layer(residual)
+                _each_layer(data_set), _each_layer(residual)
             ):
                 symbolic_regressor = run_gplearn_iteration(
                     data_set_layer, target=residual_layer, **kw
