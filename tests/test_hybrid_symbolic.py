@@ -1,8 +1,8 @@
 import pyqg
 import numpy as np
 import xarray as xr
-from eqn_disco.hybrid_symbolic import LinearSymbolicRegression, run_gplearn_iteration
-from eqn_disco.utils import FeatureExtractor
+from eqn_disco.hybrid_symbolic import LinearSymbolicRegression, run_gplearn_iteration, hybrid_symbolic_regression
+from eqn_disco.utils import FeatureExtractor, example_non_pyqg_data_set
 
 def test_linear_symbolic():
     model = pyqg.QGModel()
@@ -28,27 +28,9 @@ def test_linear_symbolic():
     model2 = pyqg.QGModel(parameterization=parameterization)
     model2._step_forward()
 
-def test_run_gplearn_iteration():
-    grid_length = 8
-    num_samples = 20
-    grid = np.linspace(0, 1, grid_length)
-    x, y = np.meshgrid(grid, grid)
-    inputs = np.random.normal(size=(num_samples, grid_length, grid_length))
-    l = 2 * np.pi * np.append(np.arange(0., grid_length/2), np.arange(-grid_length/2, 0.))
-    k = 2 * np.pi * np.arange(0., grid_length/2 + 1)
 
-    data_set = xr.Dataset(
-        data_vars=dict(
-            inputs=(('batch', 'y', 'x'), inputs),
-        ),
-        coords=dict(
-            x=grid,
-            y=grid,
-            l=l,
-            k=k,
-            batch=np.arange(num_samples)
-        )
-    )
+def test_run_gplearn_iteration():
+    data_set = example_non_pyqg_data_set()
 
     extractor = FeatureExtractor(data_set, example_realspace_input="inputs")
 
@@ -69,3 +51,33 @@ def test_run_gplearn_iteration():
     result = str(regressor._program)
 
     assert result == 'ddx(inputs)'
+
+
+def test_hybrid_symbolic_regression():
+    data_set = example_non_pyqg_data_set()
+
+    extractor = FeatureExtractor(data_set, example_realspace_input="inputs")
+
+    data_set['target'] = extractor.extract_feature('ddx(inputs)')
+
+    terms, hybrid_regressors = hybrid_symbolic_regression(
+        data_set,
+        target='target',
+        max_iters=2,
+        verbose=False,
+        base_features=['inputs'],
+        base_functions=[],
+        spatial_functions=['ddx'],
+        population_size=100,
+        generations=10,
+        metric='mse',
+        random_state=42
+    )
+
+    assert terms == ['ddx(inputs)']
+
+    regressor = hybrid_regressors[-1]
+
+    assert len(regressor.models) == 1
+
+    np.testing.assert_allclose(regressor.models[0].coef_[0], 1.0)

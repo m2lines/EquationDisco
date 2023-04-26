@@ -17,7 +17,6 @@ ModelLike = Union[pyqg.Model, xr.Dataset] if IMPORTED_PYQG else xr.Dataset
 ArrayLike = Union[np.ndarray, xr.DataArray]
 Numeric = Union[ArrayLike, int, float]
 StringOrNumeric = Union[str, Numeric]
-ParameterizationSuperclass = pyqg.Parameterization if IMPORTED_PYQG else object
 
 
 def ensure_numpy(array: ArrayLike) -> np.ndarray:
@@ -38,12 +37,13 @@ def ensure_numpy(array: ArrayLike) -> np.ndarray:
     return array
 
 
-class Parameterization(ParameterizationSuperclass):
+class Parameterization(pyqg.Parameterization if IMPORTED_PYQG else object):  # type: ignore
     """Helper class for defining parameterizations.
 
-    This extends the normal pyqg parameterization framework to handle
+    This extends the normal pyqg.Parameterization framework to handle
     prediction of either subgrid forcings or fluxes, as well as to apply to
-    either pyqg.Models orxarray.Datasets.
+    either pyqg.Models or xarray.Datasets. Can also be used without pyqg, though
+    in a more limited fashion.
 
     """
 
@@ -55,12 +55,12 @@ class Parameterization(ParameterizationSuperclass):
         -------
         List[str]
             List of parameterization targets returned by this parameterization.
-            Valid options are "q_forcing_total", "q_subgrid_forcing",
-            "u_subgrid_forcing", "v_subgrid_forcing", "uq_subgrid_flux",
-            "vq_subgrid_flux", "uu_subgrid_flux", "vv_subgrid_flux", and
-            "uv_subgrid_flux". See the dataset description notebook or the
-            paper for more details on the meanings of these target fields and
-            how they're used.
+            If using within pyqg, valid options are "q_forcing_total",
+            "q_subgrid_forcing", "u_subgrid_forcing", "v_subgrid_forcing",
+            "uq_subgrid_flux", "vq_subgrid_flux", "uu_subgrid_flux",
+            "vv_subgrid_flux", and "uv_subgrid_flux". See the dataset
+            description notebook or the paper for more details on the meanings
+            of these target fields and how they're used.
 
         """
         raise NotImplementedError
@@ -99,14 +99,14 @@ class Parameterization(ParameterizationSuperclass):
             Indication of whether the parameterization targets PV or velocity.
 
         """
+        assert IMPORTED_PYQG, "pyqg must be installed to use this method"
+
         if any(q in self.targets[0] for q in ["q_forcing", "q_subgrid"]):
             return "q_parameterization"
 
         return "uv_parameterization"
 
-    def __call__(
-        self, model: ModelLike
-    ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+    def __call__(self, model: ModelLike) -> Union[np.ndarray, Tuple[np.ndarray, ...]]:
         """Invoke the parameterization in the format required by pyqg.
 
         Parameters
@@ -124,6 +124,7 @@ class Parameterization(ParameterizationSuperclass):
            type as the model's PV variable.
 
         """
+        assert IMPORTED_PYQG, "pyqg must be installed to use this method"
 
         def _ensure_array(array: ArrayLike) -> np.ndarray:
             """Convert an array-like to numpy with model-compatible dtype."""
@@ -289,7 +290,9 @@ class FeatureExtractor:
 
     """
 
-    def __call__(self, feature_or_features: Union[str, List[str]], flat: bool = False):
+    def __call__(
+        self, feature_or_features: Union[str, List[str]], flat: bool = False
+    ) -> np.ndarray:
         """Extract the given feature/features from underlying dataset/ model.
 
         Parameters
@@ -307,13 +310,13 @@ class FeatureExtractor:
 
         """
         if isinstance(feature_or_features, str):
-            res = ensure_numpy(self.extract_feature(feature_or_features))
+            res = ensure_numpy(self.extract_feature(feature_or_features))  # type: ignore
             if flat:
                 res = res.reshape(-1)
 
         else:
             res = np.array(
-                [ensure_numpy(self.extract_feature(f)) for f in feature_or_features]
+                [ensure_numpy(self.extract_feature(f)) for f in feature_or_features]  # type: ignore
             )
             if flat:
                 res = res.reshape(len(feature_or_features), -1).T
@@ -402,9 +405,9 @@ class FeatureExtractor:
         return self.example_realspace_input.dims
 
     @property
-    def spectral_dims(self) -> Tuple[str, ...]:
+    def spectral_dims(self) -> List[str]:
         """Names of spatial dimensions in spectral space."""
-        return [dict(y="l", x="k").get(d, d) for d in self.spatial_dims]
+        return [{"y": "l", "x": "k"}.get(d, d) for d in self.spatial_dims]
 
     def ifft(self, spectral_array: ArrayLike) -> ArrayLike:
         """Compute the inverse FFT of ``x``.
@@ -435,8 +438,6 @@ class FeatureExtractor:
     def _real(self, feature: StringOrNumeric) -> ArrayLike:
         """Load and convert a feature to real space, if necessary."""
         arr = self[feature]
-        if isinstance(arr, float):
-            return arr
         if self._is_real(arr):
             return arr
         return self.ifft(arr)
@@ -444,8 +445,6 @@ class FeatureExtractor:
     def _compl(self, feature: StringOrNumeric) -> ArrayLike:
         """Load and convert a feature to spectral space, if necessary."""
         arr = self[feature]
-        if isinstance(arr, float):
-            return arr
         if self._is_real(arr):
             return self.fft(arr)
         return arr
@@ -684,3 +683,49 @@ def energy_budget_figure(models, skip=0):
         axis.set_ylim(-vmax, vmax)
     plt.tight_layout()
     return fig
+
+
+def example_non_pyqg_data_set(
+    grid_length: int = 8, num_samples: int = 20
+) -> xr.Dataset:
+    """Create a simple xarray dataset for testing the library without `pyqg`.
+
+    This dataset has a single variable called `inputs` with `x`, `y`, and
+    `batch` coordinates.  It also has spectral coordinates `k` and `l` defined.
+    It can be used in various methods of the library without needing to invoke
+    `pyqg`.
+
+    Parameters
+    ----------
+    grid_length : int
+        The length of the grid in each dimension.
+    num_samples : int
+        The number of samples in the dataset.
+
+    Returns
+    -------
+    xr.Dataset
+        The dataset.
+
+    """
+    grid = np.linspace(0, 1, grid_length)
+    inputs = np.random.normal(size=(num_samples, grid_length, grid_length))
+    vertical_wavenumbers = (
+        2
+        * np.pi
+        * np.append(np.arange(0.0, grid_length / 2), np.arange(-grid_length / 2, 0.0))
+    )
+    horizontal_wavenumbers = 2 * np.pi * np.arange(0.0, grid_length / 2 + 1)
+
+    return xr.Dataset(
+        data_vars={
+            "inputs": (("batch", "y", "x"), inputs),
+        },
+        coords={
+            "x": grid,
+            "y": grid,
+            "l": vertical_wavenumbers,
+            "k": horizontal_wavenumbers,
+            "batch": np.arange(num_samples),
+        },
+    )
