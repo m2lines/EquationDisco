@@ -126,9 +126,9 @@ class Parameterization(pyqg.Parameterization if IMPORTED_PYQG else object):  # t
         """
         assert IMPORTED_PYQG, "pyqg must be installed to use this method"
 
-        def _ensure_array(array: ArrayLike) -> np.ndarray:
+        def _ensure_array(array: Numeric) -> np.ndarray:
             """Convert an array-like to numpy with model-compatible dtype."""
-            return ensure_numpy(array).astype(model.q.dtype)
+            return ensure_numpy(array).astype(model.q.dtype)  # type: ignore
 
         preds = self.predict(model)
         keys = list(sorted(preds.keys()))  # these are the same as our targets
@@ -435,19 +435,23 @@ class FeatureExtractor:
         """Check if a given array is in real space."""
         return len(set(arr.shape[-2:])) == 1
 
-    def _real(self, feature: StringOrNumeric) -> ArrayLike:
+    def _real(self, feature: StringOrNumeric) -> Numeric:
         """Load and convert a feature to real space, if necessary."""
-        arr = self[feature]
-        if self._is_real(arr):
-            return arr
-        return self.ifft(arr)
+        value = self[feature]
+        if isinstance(value, float):
+            return value
+        if self._is_real(value):
+            return value
+        return self.ifft(value)
 
-    def _compl(self, feature: StringOrNumeric) -> ArrayLike:
+    def _compl(self, feature: StringOrNumeric) -> Numeric:
         """Load and convert a feature to spectral space, if necessary."""
-        arr = self[feature]
-        if self._is_real(arr):
-            return self.fft(arr)
-        return arr
+        value = self[feature]
+        if isinstance(value, float):
+            return value
+        if self._is_real(value):
+            return self.fft(value)
+        return value
 
     # Spectral derivatrives
     def ddxh(self, field: StringOrNumeric) -> ArrayLike:
@@ -482,27 +486,27 @@ class FeatureExtractor:
         return self.ddxh(field * self.model.ufull) + self.ddyh(field * self.model.vfull)
 
     # Real counterparts
-    def ddx(self, field: StringOrNumeric) -> ArrayLike:
+    def ddx(self, field: StringOrNumeric) -> Numeric:
         """Compute the horizontal derivative of a field."""
         return self._real(self.ddxh(field))
 
-    def ddy(self, field: StringOrNumeric) -> ArrayLike:
+    def ddy(self, field: StringOrNumeric) -> Numeric:
         """Compute the vertical derivative of a field."""
         return self._real(self.ddyh(field))
 
-    def laplacian(self, field: StringOrNumeric) -> ArrayLike:
+    def laplacian(self, field: StringOrNumeric) -> Numeric:
         """Compute the Laplacian of a field."""
         return self._real(self.laplacianh(field))
 
-    def advected(self, field: StringOrNumeric) -> ArrayLike:
+    def advected(self, field: StringOrNumeric) -> Numeric:
         """Advect a field."""
         return self._real(self.advectedh(field))
 
-    def curl(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> ArrayLike:
+    def curl(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> Numeric:
         """Compute the curl of two fields."""
         return self._real(self.curlh(field_x, field_y))
 
-    def div(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> ArrayLike:
+    def div(self, field_x: StringOrNumeric, field_y: StringOrNumeric) -> Numeric:
         """Compute the divergence of two fields."""
         return self._real(self.divh(field_x, field_y))
 
