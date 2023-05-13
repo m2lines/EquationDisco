@@ -1,156 +1,356 @@
-import pyqg
-import gplearn
+"""Hybrid symbolic module."""
+from typing import Optional, List, Dict, Any, Tuple, Union
+
 import gplearn.genetic
+from gplearn.functions import _Function as Function
 import numpy as np
 import xarray as xr
 from scipy.stats import pearsonr
 from sklearn.linear_model import LinearRegression
-from pyqg_parameterization_benchmarks.utils import FeatureExtractor, Parameterization
 
-def make_custom_gplearn_functions(ds):
-    """Define custom gplearn functions for spatial derivatives that are specific
-    to the spatial shape of that particular dataset"""
+from .utils import (
+    FeatureExtractor,
+    Parameterization,
+    ArrayLike,
+    ModelLike,
+    ensure_numpy,
+)
 
-    extractor = FeatureExtractor(ds)
 
-    def apply_spatial(func, x):
-        r = func(x.reshape(ds.q.shape))
-        if isinstance(r, xr.DataArray): r = r.data
-        return r.reshape(x.shape)
+def make_custom_gplearn_functions(data_set: xr.Dataset, spatial_funcs: List[str]):
+    """Define custom gplearn functions for spatial derivatives.
 
-    ddx = lambda x: apply_spatial(extractor.ddx, x)
-    ddy = lambda x: apply_spatial(extractor.ddy, x)
-    lap = lambda x: apply_spatial(extractor.laplacian, x)
-    adv = lambda x: apply_spatial(extractor.advected, x)
+    Parameters
+    ----------
+    data_set : xarray.Dataset
+        Dataset containing spatial variables.
 
-    # create gplearn function objects to represent these transformations
-    return [          
-        gplearn.functions._Function(function=ddx, name='ddx', arity=1),
-        gplearn.functions._Function(function=ddy, name='ddy', arity=1),
-        gplearn.functions._Function(function=lap, name='laplacian', arity=1),
-        gplearn.functions._Function(function=adv, name='advected', arity=1),
+    spatial_funcs : List[str]
+        Names of spatial differential operators to explore during genetic
+        programming. Must be supported by the FeatureExtractor class, e.g.
+        ['ddx', 'ddy', 'laplacian', 'advected'].
+
+    Returns
+    -------
+    List[gplearn.functions._Function]
+        List of functions representing spatial differential operators that can
+        be evaluated over the dataset during genetic programming
+
+    """
+    extractor = FeatureExtractor(data_set)
+
+    def apply_spatial(function_name: str, flat_array: ArrayLike) -> np.ndarray:
+        """Apply a `spatial_function` to an initially `flat_array`."""
+        spatial_func = getattr(extractor, function_name)
+        spatial_array = flat_array.reshape(extractor.spatial_shape)
+        spatial_output = ensure_numpy(spatial_func(spatial_array))
+        return spatial_output.reshape(flat_array.shape)
+
+    return [
+        Function(
+            function=lambda x, name=function_name: apply_spatial(name, x),
+            name=function_name,
+            arity=1,
+        )
+        for function_name in spatial_funcs
     ]
 
-def run_gplearn_iteration(ds, target,
-        base_features=['q','u','v'],
-        base_functions=['add','mul'],
-        **kwargs):
-    """Run gplearn for one iteration using custom spatial derivatives."""
+
+def run_gplearn_iteration(
+    data_set: xr.Dataset,
+    target: np.ndarray,
+    base_features: Optional[List[str]] = None,
+    base_functions: Optional[List[str]] = None,
+    spatial_functions: Optional[List[str]] = None,
+    **kwargs: Dict[str, Any],
+):
+    """Run gplearn for one iteration using custom spatial derivatives.
+
+    Parameters
+    ----------
+    data_set : xarray.Dataset
+        Dataset generated from pyqg.QGModel runs
+    target : numpy.ndarray
+        Target spatial field to be predicted from dataset attributes
+    base_features : List[str]
+        Features from the dataset to be used as the initial set of atomic
+        inputs to genetic programming. Defaults to ['q', 'u', 'v'].
+    base_functions : List[str]
+        Names of gplearn built-in functions to explore during genetic
+        programming (in addition to differential operators). Defaults to
+        ['add', 'mul'].
+    spatial_functions : List[str]
+        Names of spatial differential operators to explore during genetic
+        programming. Defaults to ['ddx', 'ddy', 'laplacian', 'advected'].
+    **kwargs : dict
+        Additional arguments to pass to gplearn.genetic.SymbolicRegressor
+
+    Returns
+    -------
+    gplearn.genetic.SymbolicRegressor
+        A trained symbolic regression model that predicts the ``target`` based
+        on functions of the dataset's ``base_features``.
+
+    """
+    base_features = ["q", "u", "v"] if base_features is None else base_features
+    base_functions = ["add", "mul"] if base_functions is None else base_functions
+    spatial_functions = (
+        ["ddx", "ddy", "laplacian", "advected"]
+        if spatial_functions is None
+        else spatial_functions
+    )
+    spatial_functions = make_custom_gplearn_functions(data_set, spatial_functions)
+    function_set = base_functions + spatial_functions  # type: ignore
 
     # Flatten the input and target data
-    x = np.array([ds[feature].data.reshape(-1)
-                for feature in base_features]).T
-    y = target.reshape(-1)
-    
-    gplearn_kwargs = dict(
-        population_size=5000,
-        generations=50,
-        p_crossover=0.7,
-        p_subtree_mutation=0.1,
-        p_hoist_mutation=0.05,
-        p_point_mutation=0.1,
-        max_samples=0.9,
-        verbose=1,
-        parsimony_coefficient=0.001,
-        metric='pearson', # IMPORTANT: fit using pearson correlation, not MSE
-        const_range=(-2,2),
-    )
-    
+    inputs = np.array(
+        [data_set[feature].data.reshape(-1) for feature in base_features]
+    ).T
+    targets = target.reshape(-1)
+
+    gplearn_kwargs = {
+        "population_size": 5000,
+        "generations": 50,
+        "p_crossover": 0.7,
+        "p_subtree_mutation": 0.1,
+        "p_hoist_mutation": 0.05,
+        "p_point_mutation": 0.1,
+        "max_samples": 0.9,
+        "verbose": 1,
+        "parsimony_coefficient": 0.001,
+        "metric": "pearson",  # IMPORTANT: fit with pearson corr and not MSE.
+        "const_range": (-2, 2),
+    }
+
     gplearn_kwargs.update(**kwargs)
 
     # Configure gplearn to run with a relatively small population
     # and for relatively few generations (again for performance)
-    sr = gplearn.genetic.SymbolicRegressor(
+    regressor = gplearn.genetic.SymbolicRegressor(
         feature_names=base_features,
-        function_set=(
-            base_functions + make_custom_gplearn_functions(ds) # use our custom ops
-        ),
-        **gplearn_kwargs
+        function_set=function_set,
+        **gplearn_kwargs,
     )
 
     # Fit the model
-    sr.fit(x, y)
+    regressor.fit(inputs, targets)
 
     # Return the result
-    return sr
+    return regressor
+
 
 class LinearSymbolicRegression(Parameterization):
-    def __init__(self, lr1, lr2, inputs, target):
-        self.lr1 = lr1
-        self.lr2 = lr2
+    """Linear symbolic regress parameterization.
+
+    Parameters
+    ----------
+    models : List[sklearn.linear_model.LinearRegression]
+        Linear models to predict each layer's target based on input
+        expressions
+    inputs : List[str]
+        List of string input expressions and functions that can be
+        extracted from a pyqg.QGModel or dataset using a
+        ``FeatureExtractor``
+    target : str
+        String expression representing the target variable.
+
+    """
+
+    def __init__(
+        self,
+        models: List[LinearRegression],
+        inputs: List[str],
+        target: str,
+    ):
+        """Build ``LinearSymbolicRegression``."""
+        self.models = models
         self.inputs = inputs
         self.target = target
+        super().__init__()
 
     @property
-    def targets(self):
+    def targets(self) -> List[str]:
+        """Return the targets.
+
+        Returns
+        -------
+        List[str]
+            The target.
+
+        """
         return [self.target]
-    
-    @property
-    def models(self):
-        return [self.lr1, self.lr2]
-        
-    def predict(self, m):
-        extract = FeatureExtractor(m)
-        
-        x = extract(self.inputs)
+
+    def predict(self, model_or_dataset: ModelLike) -> Dict[str, ArrayLike]:
+        """Make a prediction for a given model or dataset.
+
+        Parameters
+        ----------
+        model_or_dataset : Union[pyqg.QGModel, xarray.Dataset]
+            The live-running model or dataset of stored model runs for which we
+            want to make subgrid forcing predictions.
+
+        Returns
+        -------
+        result : Dict[str, numpy.ndarray]
+            For each string target expression, the predicted subgrid forcing
+            (as an array with the same shape as the corresponding inputs in the
+            model or dataset).
+
+        """
+        extract = FeatureExtractor(model_or_dataset)
+
+        inputs = extract(self.inputs)
 
         preds = []
-        
+
         # Do some slightly annoying reshaping to properly apply LR coefficients
-        # to data that may or may not have extra batch dimensions 
-        for z, lr in enumerate(self.models):
-            data_indices = [slice(None) for _ in x.shape]
-            data_indices[-3] = z
-            x_z = x[tuple(data_indices)]
-            coef_indices = [np.newaxis for _ in x_z.shape]
-            coef_indices[0] = slice(None)
-            c_z = lr.coef_[tuple(coef_indices)]
-            pred_z = (x_z * c_z).sum(axis=0)
-            preds.append(pred_z)
-            
+        # to data that may or may not have extra batch dimensions
+        for idx, lr_model in enumerate(self.models):
+            data_indices = [slice(None) for _ in inputs.shape]
+            data_indices[-3] = idx  # type: ignore
+            layer_inputs = inputs[tuple(data_indices)]
+            coef_indices = [np.newaxis for _ in layer_inputs.shape]
+            coef_indices[0] = slice(None)  # type: ignore
+            layer_coefs = lr_model.coef_[tuple(coef_indices)]
+            layer_preds = (layer_inputs * layer_coefs).sum(axis=0)
+            preds.append(layer_preds)
+
         preds = np.stack(preds, axis=-3)
         res = {}
         res[self.target] = preds
-        return res
-    
-    @classmethod
-    def fit(kls, ds, inputs, target='q_subgrid_forcing'):
-        lrs = []
-        for z in [0,1]:
-            extract = FeatureExtractor(ds.isel(lev=z))
-            lrs.append(
-                LinearRegression(fit_intercept=False).fit(
-                    extract(inputs, flat=True),
-                    extract(target, flat=True)
-                )
-            )
-        return kls(*lrs, inputs, target)  
-    
-def corr(a,b):
-    return pearsonr(np.array(a.data).ravel(), np.array(b.data).ravel())[0]
+        return res  # type: ignore
 
-def hybrid_symbolic_regression(ds, target='q_subgrid_forcing', max_iters=10, verbose=True, **kw):
-    extract = FeatureExtractor(ds)
-    residual = ds[target]
-    terms = []
-    vals = []
-    lrs = []
-    
+    @classmethod
+    def fit(
+        cls,
+        data_set: xr.Dataset,
+        inputs: List[str],
+        target: str = "q_subgrid_forcing",
+    ):
+        """Fit lin-reg param on ``dataset`` in terms of symbolic ``inputs``.
+
+        Parameters
+        ----------
+        data_set : xarray.Dataset
+            Dataset of pyqg.QGModel runs
+        inputs : List[str]
+            List of expressions that can be evaluated by a
+            ``FeatureExtractor``, to be used as inputs for the linear
+            regression models
+        target : Optional[str]
+            Target variable to predict. Defaults to the subgrid forcing of
+            potential vorticity.
+
+        Returns
+        -------
+        LinearSymbolicRegression
+            Resulting linear regression parameterization.
+
+        """
+        extractors = [FeatureExtractor(layer) for layer in _each_layer(data_set)]
+
+        models = [
+            LinearRegression(fit_intercept=False).fit(
+                extract(inputs, flat=True), extract(target, flat=True)
+            )
+            for extract in extractors
+        ]
+
+        return cls(models, inputs, target)
+
+
+def _each_layer(
+    data: Union[xr.Dataset, xr.DataArray]
+) -> List[Union[xr.Dataset, xr.DataArray]]:
+    """Return a list representing the `data` broken out by vertical layer."""
+    if "lev" in data.dims:
+        return [data.isel(lev=z) for z in range(len(data.lev))]
+
+    return [data]
+
+
+def _corr(spatial_data_a: ArrayLike, spatial_data_b: ArrayLike) -> float:
+    """Return the Pearson correlation between two spatial data arrays.
+
+    Parameters
+    ----------
+    a : Union[xarray.DataArray, numpy.ndarray]
+        First spatial data array
+    b : Union[xarray.DataArray, numpy.ndarray]
+        Second spatial data array
+
+    Returns
+    -------
+    float
+        Correlation between the data arrays
+
+    """
+    return pearsonr(
+        ensure_numpy(spatial_data_a).ravel(),
+        ensure_numpy(spatial_data_b).ravel(),
+    )[0]
+
+
+def hybrid_symbolic_regression(  # pylint: disable=too-many-locals
+    data_set: xr.Dataset,
+    target: str = "q_subgrid_forcing",
+    max_iters: int = 10,
+    verbose: bool = True,
+    **kw,
+) -> Tuple[List[str], List[LinearRegression]]:
+    """Run hybrid symbolic and linear regression.
+
+    Uses symbolic regression to find expressions correlated with the output,
+    then fitting linear regression to get an exact expression, then running
+    symbolic regression again on the resulting residuals (repeating until
+    ``max_iters``).
+
+    Parameters
+    ----------
+    data_set : xarray.Dataset
+        Dataset of pyqg.QGModel runs.
+    target : str
+        String representing target variable to predict. Defaults to subgrid
+        forcing of potential vorticity.
+    max_iters : int
+        Number of iterations to run. Defaults to 10.
+    verbose : bool
+        Whether to print intermediate outputs. Defaults to True.
+    **kw : dict
+        Additional arguments to pass to ``run_gplearn_iteration``.
+
+    Returns
+    -------
+    Tuple[List[str], List[LinearSymbolicRegression]]
+        List of terms discovered at each iteration alongside list of linear
+        symbolic regression parameterization objects (each fit to all terms
+        available at corresponding iteration)
+
+    """
+    extract = FeatureExtractor(data_set)
+    residual = data_set[target]
+    terms, vals, hybrid_regressors = [], [], []
+
     try:
         for i in range(max_iters):
-            for lev in [0,1]:
-                sr = run_gplearn_iteration(ds.isel(lev=lev),
-                                           target=residual.isel(lev=lev).data,
-                                           **kw)
-                new_term = str(sr._program)
+            for data_set_layer, residual_layer in zip(
+                _each_layer(data_set), _each_layer(residual)  # type: ignore
+            ):
+                symbolic_regressor = run_gplearn_iteration(
+                    data_set_layer, target=residual_layer.data, **kw  # type: ignore
+                )
+                new_term = str(
+                    symbolic_regressor._program  # pylint: disable=protected-access
+                )
                 new_vals = extract(new_term)
                 # Prevent spurious duplicates, e.g. ddx(q) and ddx(add(1,q))
-                if not any(corr(new_vals, v) > 0.99 for v in vals):
+                if not any(_corr(new_vals, v) > 0.99 for v in vals):
                     terms.append(new_term)
                     vals.append(new_vals)
-            lrs.append(LinearSymbolicRegression.fit(ds, terms, target))
-            preds = lrs[-1].test_offline(ds).load()
-            residual = (ds[target] - preds[f"{target}_predictions"]).load()
+            hybrid_regressor = LinearSymbolicRegression.fit(data_set, terms, target)
+            hybrid_regressors.append(hybrid_regressor)
+            preds = hybrid_regressor.test_offline(data_set).load()
+            residual = (data_set[target] - preds[f"{target}_predictions"]).load()
             if verbose:
                 print(f"Iteration {i+1}")
                 print("Discovered terms:", terms)
@@ -160,4 +360,4 @@ def hybrid_symbolic_regression(ds, target='q_subgrid_forcing', max_iters=10, ver
         if verbose:
             print("Exiting early due to keyboard interrupt")
 
-    return terms, lrs
+    return terms, hybrid_regressors
