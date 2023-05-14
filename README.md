@@ -18,3 +18,12 @@ It is currently being worked on by [Jim Denholm](https://github.com/jdenholm) an
 
 ## License
 The work is available under an MIT License; see [the license](LICENSE).
+
+
+## Current state of development
+
+- [ ] Code from original repo ported over and refactoring/linting in progress.
+  - Support from Andrew Ross in progress.
+- [ ] Get the demo notebook working on example dataset.
+- [ ] Define a use case or standard form for supplying data.
+- [ ] Add test suites for everything.
