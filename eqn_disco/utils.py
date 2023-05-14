@@ -331,14 +331,10 @@ class FeatureExtractor:
 
         assert hasattr(
             self.model, "x"
-        ), "dataset must have horizontal realspace dimension"
-        assert hasattr(
-            self.model, "k"
-        ), "dataset must have horizontal spectral dimension"
+        ), "dataset must have horizontal dimension named `x`"
         assert hasattr(
             self.model, "y"
-        ), "dataset must have vertical realspace dimension"
-        assert hasattr(self.model, "l"), "dataset must have vertical spectral dimension"
+        ), "dataset must have vertical dimension named `y`"
 
         if example_realspace_input is None:
             if hasattr(self.model, "q"):
@@ -357,6 +353,20 @@ class FeatureExtractor:
             self.ik = 1j * self.model.k  # pylint: disable=invalid-name
             self.il = 1j * self.model.l  # pylint: disable=invalid-name
         else:
+            if not hasattr(self.model, "k"):
+                grid_length = self.example_realspace_input.shape[-1]
+                horizontal_wavenumbers = 2 * np.pi * np.arange(0.0, grid_length / 2 + 1)
+                vertical_wavenumbers = (
+                    2
+                    * np.pi
+                    * np.append(
+                        np.arange(0.0, grid_length / 2),
+                        np.arange(-grid_length / 2, 0.0),
+                    )
+                )
+                self.model["k"] = horizontal_wavenumbers
+                self.model["l"] = vertical_wavenumbers
+
             k, l = np.meshgrid(  # pylint: disable=invalid-name
                 self.model.k, self.model.l
             )
@@ -695,9 +705,8 @@ def example_non_pyqg_data_set(
     """Create a simple xarray dataset for testing the library without `pyqg`.
 
     This dataset has a single variable called `inputs` with `x`, `y`, and
-    `batch` coordinates.  It also has spectral coordinates `k` and `l` defined.
-    It can be used in various methods of the library without needing to invoke
-    `pyqg`.
+    `batch` coordinates.  It can be used in various methods of the library
+    without needing to invoke `pyqg`.
 
     Parameters
     ----------
@@ -714,12 +723,6 @@ def example_non_pyqg_data_set(
     """
     grid = np.linspace(0, 1, grid_length)
     inputs = np.random.normal(size=(num_samples, grid_length, grid_length))
-    vertical_wavenumbers = (
-        2
-        * np.pi
-        * np.append(np.arange(0.0, grid_length / 2), np.arange(-grid_length / 2, 0.0))
-    )
-    horizontal_wavenumbers = 2 * np.pi * np.arange(0.0, grid_length / 2 + 1)
 
     return xr.Dataset(
         data_vars={
@@ -728,8 +731,6 @@ def example_non_pyqg_data_set(
         coords={
             "x": grid,
             "y": grid,
-            "l": vertical_wavenumbers,
-            "k": horizontal_wavenumbers,
             "batch": np.arange(num_samples),
         },
     )
